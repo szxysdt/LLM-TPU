@@ -136,7 +136,7 @@ class RWKV_Block(nn.Module):
         x_shifted = x_scaled + bias
         return x_shifted
 
-    def channel_mixing(self, x: torch.Tensor, state: torch.Tensor, i: int) -> torch.Tensor:
+    def channel_mixing(self, x: torch.Tensor, state: torch.Tensor, i: torch.Tensor) -> torch.Tensor:
         """
         通道混合函数。
 
@@ -162,7 +162,7 @@ class RWKV_Block(nn.Module):
         output = r * self.ffn_value(k)
         return output
 
-    def time_mixing(self, x: torch.Tensor, state: torch.Tensor, i: int) -> torch.Tensor:
+    def time_mixing(self, x: torch.Tensor, state: torch.Tensor, i: torch.Tensor) -> torch.Tensor:
         """
         时间混合函数。
 
@@ -220,7 +220,7 @@ class RWKV_Block(nn.Module):
         return self.att_output(x)
 
 
-    def forward(self, x: torch.Tensor, state: torch.Tensor, i: int) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, state: torch.Tensor, id: torch.Tensor) -> torch.Tensor:
         """
         模型的前向传播。
 
@@ -232,6 +232,10 @@ class RWKV_Block(nn.Module):
         Returns:
             torch.Tensor: 前向传播结果张量，形状与输入的x相同。
         """
+        if not isinstance(id,torch.Tensor):
+            i = torch.as_tensor([id],dtype=torch.int64)
+        else:
+            i = id
         if self.onnx_opset >= 17:
             x = x + self.time_mixing(self.ln1(x), state, i)
             x = x + self.channel_mixing(self.ln2(x), state, i)

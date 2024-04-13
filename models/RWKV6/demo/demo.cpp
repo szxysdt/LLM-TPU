@@ -28,7 +28,7 @@ struct rwkv_state {
 class RWKV6 {
   // External Interface running on BM1684X
  public:
-  void init(const std::vector<int> &devid, std::string model_path,
+  void init(const std::vector<int> &devices, std::string model_path,
             std::string tokenizer_path);
   void deinit();
   // Normal chat interface
@@ -65,6 +65,8 @@ class RWKV6 {
   std::vector<bm_handle_t> handles;
   void *p_bmrt;
 
+  const bm_net_info_t *rwkv;
+
   // rwkv_tokenizer
   //
   RWKV_Tokenizer rwkv_tokenizer;
@@ -82,11 +84,47 @@ class RWKV6 {
 };
 
 /**
- *
+ * init rwkv model
  */
-void RWKV6::init(const std::vector<int> &devid, std::string model_path,
+void RWKV6::init(const std::vector<int> &devices, std::string model_path,
                  std::string tokenizer_path) {
+  // load tokenizer
   load_rwkv_tokenizer(tokenizer_path);
+
+  // request bm_handle
+  std::cout << "Device [ ";
+  for (auto d : devices) {
+    std::cout << d << " ";
+  }
+  std::cout << "] loading ....\n";
+  for (auto d : devices) {
+    bm_handle_t h;
+    bm_status_t status = bm_dev_request(&h, d);
+    assert(BM_SUCCESS == status);
+    handles.push_back(h);
+  }
+  bm_handle = handles[0];
+
+// create bmruntime
+#ifdef SOC_TARGET
+  p_bmrt = bmrt_create(handles[0]);
+#else
+  p_bmrt = bmrt_create_ex(handles.data(), handles.size());
+#endif
+  assert(NULL != p_bmrt);
+
+  // load bmodel by file
+  printf("Model[%s] loading ....\n", model_path.c_str());
+  bool ret = bmrt_load_bmodel(p_bmrt, model_path.c_str());
+  assert(true == ret);
+  printf("Done!\n");
+
+  // get rwkv model
+  rwkv = bmrt_get_network_info(p_bmrt, "rwkv");
+  // std::string test_info;
+  int test_info;
+  test_info = rwkv->stage_num;
+  std::cout << "test_info " << test_info << std::endl;
   return;
 }
 
