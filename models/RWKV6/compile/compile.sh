@@ -41,11 +41,11 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [ "$name" = "rwkv6-1b5" ]; then
- num_layers=24
+ num_layers=23
  hidden_size=2048
  echo "Compile RWKV6-1B5"
 elif [ "$name" = "rwkv6-3b" ]; then
- num_layers=32
+ num_layers=31
  hidden_size=2560
  echo "Compile RWKV6-3B"
 else

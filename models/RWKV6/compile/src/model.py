@@ -232,10 +232,8 @@ class RWKV_Block(nn.Module):
         Returns:
             torch.Tensor: 前向传播结果张量，形状与输入的x相同。
         """
-        if not isinstance(id,torch.Tensor):
-            i = torch.as_tensor([id],dtype=torch.int64)
-        else:
-            i = id
+        # TODO fix TracerWarning: torch.as_tensor results are registered as constants in the trace......
+        i = torch.as_tensor([id],dtype=torch.int64)
         if self.onnx_opset >= 17:
             x = x + self.time_mixing(self.ln1(x), state, i)
             x = x + self.channel_mixing(self.ln2(x), state, i)

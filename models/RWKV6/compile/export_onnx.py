@@ -4,8 +4,98 @@ import argparse
 import os
 
 import torch
+from tqdm import tqdm
 
 from src.model import RWKV_RNN
+
+
+class Embedding(torch.nn.Module):
+
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, input_ids):
+        emb_out = origin_model.emb(input_ids).squeeze(1)
+        ln_out = origin_model.manual_layer_norm(
+            emb_out, origin_model.ln0_weight, origin_model.ln0_bias, 1e-5
+        )
+        return ln_out
+
+
+class Block(torch.nn.Module):
+
+    def __init__(self, layer_id):
+        super().__init__()
+        self.layer_id = layer_id
+        self.layer = origin_model.blocks[layer_id]
+
+    def forward(self, b_in, state, b_id):
+        b_out = self.layer(b_in, state, b_id)
+        return b_out
+
+
+class LmHead(torch.nn.Module):
+
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, b_out):
+        head_in = origin_model.manual_layer_norm(
+            b_out, origin_model.ln_out_weight, origin_model.ln_out_bias, 1e-5
+        )
+        m_logits = origin_model.head(head_in)
+        return m_logits
+
+
+def convert_block(layer_id):
+    model = Block(layer_id)
+    b_in = torch.zeros(model_args["batch_size"], EMB_DIM)
+    state = torch.randn(model_args["batch_size"], *STATE_SIZE)
+    b_id = torch.tensor([layer_id], dtype=torch.int64)
+
+    torch.onnx.export(
+        model,
+        (b_in, state, b_id),
+        f"{folder}/block_{layer_id}.onnx",
+        verbose=False,
+        input_names=["b_in", "state", "b_id"],
+        output_names=["b_out"],
+        do_constant_folding=True,
+        opset_version=15,
+    )
+
+
+def convert_embedding():
+    model = Embedding()
+    input_ids = torch.zeros(model_args["batch_size"], 1).long()
+
+    torch.onnx.export(
+        model,
+        (input_ids),
+        f"{folder}/embedding.onnx",
+        verbose=False,
+        input_names=["input_ids"],
+        output_names=["input_embed"],
+        do_constant_folding=True,
+        opset_version=15,
+    )
+
+
+def convert_lm_head():
+    model = LmHead()
+    input = torch.randn(model_args["batch_size"], EMB_DIM)
+
+    torch.onnx.export(
+        model,
+        (input),
+        f"{folder}/lm_head.onnx",
+        verbose=False,
+        input_names=["hidden_states"],
+        output_names=["m_logits"],
+        do_constant_folding=True,
+        opset_version=15,
+    )
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="export onnx.")
@@ -28,6 +118,10 @@ if __name__ == "__main__":
     }
     print(f"Loading model {model_args['MODEL_NAME']}.pth...")
     origin_model = RWKV_RNN(model_args)
+
+    NUM_LAYERS = origin_model.num_layer
+    EMB_DIM = origin_model.n_embd
+    STATE_SIZE = origin_model.state_size
     print(origin_model)
     print("Done.")
 
@@ -39,32 +133,22 @@ if __name__ == "__main__":
     example_token = torch.zeros(
         model_args["batch_size"], 1
     ).long()  # token输入的尺寸 [batch, 1]
-    example_state = torch.rand(
+    example_state = torch.randn(
         model_args["batch_size"], *origin_model.state_size
     )  # state_size是state输入的尺寸
-    # print("Example token shape:", example_token.shape)
-    # print("Example state shape:", example_state.shape)
     # 测试推理
     A, B = origin_model(example_token, example_state)
     # 导出模型
     print("\nExport Onnx...")
 
-    torch.onnx.export(
-        origin_model,
-        (example_token, example_state),
-        f"{folder}/rwkv.onnx",
-        export_params=True,
-        verbose=True,
-        opset_version=12,  # LayerNorm最低支持是op17
-        do_constant_folding=True,
-        input_names=["token", "input_state"],
-        output_names=["out", "out_state"],
-        dynamic_axes={
-            "token": {0: "batch_size"},
-            "input_state": {0: "batch_size"},
-            "out": {0: "batch_size"},
-            "out_state": {0: "batch_size"},
-        },
-    )
+    print(f'Convert block & block_cache')
+    for i in tqdm(range(NUM_LAYERS)):
+        convert_block(i)
 
-    print(f"\nDone.\nOnnx weight has saved in {folder}/rwkv.onnx")
+    print(f'Convert embedding')
+    convert_embedding()
+
+    print(f'Convert lm_head')
+    convert_lm_head()
+
+    print(f"\nDone.\nOnnx weight has saved in {folder}")
