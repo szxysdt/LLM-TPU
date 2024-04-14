@@ -6,7 +6,8 @@ deploy/
 *.npz
 __pycache__
 
-# my tests
+# For testing purposes, it will be removed
 **/rapidjson/**
 *.pth
 !**/rapidjson/.keep
+rwkv6

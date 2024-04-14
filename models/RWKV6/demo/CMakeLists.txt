@@ -26,8 +26,11 @@ elseif (${TARGET_ARCH} STREQUAL "soc")
 	message("SoC mode, starting......")
 endif()
 
-add_definitions(-DDEBUG --std=c++17 -fPIC -Wall -Werror)
+# add_definitions(-DDEBUG --std=c++17 -fPIC -Wall -Werror)
+# For testing, it will be removed
+add_definitions(-DDEBUG --std=c++17 -fPIC -Wall)
 set(CMAKE_BUILD_TYPE "Debug")
+# set(CMAKE_BUILD_TYPE "Release")
 
 add_executable(rwkv6 demo.cpp)
 target_link_libraries(rwkv6 bmlib bmrt)

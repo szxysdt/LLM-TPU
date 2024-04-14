@@ -38,6 +38,9 @@ class RWKV6 {
 
   // Internal implementation
  private:
+  void net_launch(const bm_net_info_t *net, int stage_idx = 0);
+  inline void d2d(bm_device_mem_t &dst, bm_device_mem_t &src);
+
   /**
    * Preprocessing of forward processes
    */
@@ -59,11 +62,25 @@ class RWKV6 {
    */
   void load_rwkv_tokenizer(std::string tokenizer_path);
 
+ public:
+  int NUM_LAYERS;
+  std::vector<std::vector<uint32_t>> tokens_temp;  // for test
+
  private:
   int device_num;
   bm_handle_t bm_handle;
   std::vector<bm_handle_t> handles;
   void *p_bmrt;
+
+  std::vector<const bm_net_info_t *> net_blocks;
+  const bm_net_info_t *net_embed;
+  const bm_net_info_t *net_lm_head;
+
+  std::vector<bm_device_mem_t> state;
+  std::vector<std::pair<std::string, std::string>>
+      history_vector;  // Temporarily not enabled
+
+  std::string sys_config = "hello";  // Temporarily not enabled
 
   // rwkv_tokenizer
   //
@@ -82,11 +99,60 @@ class RWKV6 {
 };
 
 /**
- *
+ * init rwkv model
  */
-void RWKV6::init(const std::vector<int> &devid, std::string model_path,
+void RWKV6::init(const std::vector<int> &devices, std::string model_path,
                  std::string tokenizer_path) {
+  // load tokenizer
   load_rwkv_tokenizer(tokenizer_path);
+
+  // request bm_handle
+  std::cout << "Device [ ";
+  for (auto d : devices) {
+    std::cout << d << " ";
+  }
+  std::cout << "] loading ....\n";
+  for (auto d : devices) {
+    bm_handle_t h;
+    bm_status_t status = bm_dev_request(&h, d);
+    assert(BM_SUCCESS == status);
+    handles.push_back(h);
+  }
+  bm_handle = handles[0];
+
+// create bmruntime
+#ifdef SOC_TARGET
+  p_bmrt = bmrt_create(handles[0]);
+#else
+  p_bmrt = bmrt_create_ex(handles.data(), handles.size());
+#endif
+  assert(NULL != p_bmrt);
+
+  // load bmodel by file
+  printf("Model[%s] loading ....\n", model_path.c_str());
+  bool ret = bmrt_load_bmodel(p_bmrt, model_path.c_str());
+  assert(true == ret);
+  printf("Done!\n");
+
+  // get rwkv model
+  net_embed = bmrt_get_network_info(p_bmrt, "embedding");
+  net_lm_head = bmrt_get_network_info(p_bmrt, "lm_head");
+  auto num_nets = bmrt_get_network_number(p_bmrt);
+  NUM_LAYERS = num_nets - 2;
+
+  // TODO: visited_tokens ?
+  // net blocks
+  for (int i = 0; i < NUM_LAYERS; i++) {
+    auto block_name = "block_" + std::to_string(i);
+    net_blocks.emplace_back(bmrt_get_network_info(p_bmrt, block_name.c_str()));
+  }
+
+  // TODO: state cache
+
+  // std::string test_info;
+  int test_info;
+  test_info = net_embed->stage_num;
+  std::cout << "test_info " << test_info << std::endl;
   return;
 }
 
@@ -97,7 +163,29 @@ void RWKV6::init(const std::vector<int> &devid, std::string model_path,
  * Output:
  * state+logits
  */
-void RWKV6::rwkv_forward() { return; }
+void RWKV6::rwkv_forward() {
+  auto &emb_in_mem = net_embed->stages[0].input_mems[0];
+  auto &emb_out_mem = net_embed->stages[0].output_mems[0];
+  bm_memcpy_s2d(bm_handle, emb_in_mem, (void *)tokens_temp.data());
+  net_launch(net_embed);
+  auto test=net_embed->stages[0].input_shapes;
+  for (int i = 0; i < stage_info.output_shapes->num_dims; ++i) {
+    std::cout << stage_info.output_shapes->dims[i] << " ";
+  }
+  std::cout << std::endl;
+  auto test=net_embed->stages[0].output_shapes;
+  std::cout << "test " << test << std::endl;
+  std::vector<std::vector<float>> b_in;
+  // bm_memcpy_d2s(bm_handle, (void *)&b_in, emb_out_mem);
+  // for (const auto &inner_vec : b_in) {
+  //   for (uint32_t val : inner_vec) {
+  //     std::cout << val << " ";
+  //   }
+  //   std::cout << std::endl;
+  // }
+
+  return;
+}
 
 void RWKV6::load_rwkv_tokenizer(std::string tokenizer_path) {
   std::cout << "Load Tokenizer " << tokenizer_path << " ..." << std::endl;
@@ -124,11 +212,33 @@ void RWKV6::chat_rwkv() {
     std::cout << std::endl;
   }
 }
+
+void RWKV6::net_launch(const bm_net_info_t *net, int stage_idx) {
+  std::vector<bm_tensor_t> in_tensors(net->input_num);
+  std::vector<bm_tensor_t> out_tensors(net->output_num);
+
+  for (int i = 0; i < net->input_num; i++) {
+    bmrt_tensor_with_device(
+        &in_tensors[i], net->stages[stage_idx].input_mems[i],
+        net->input_dtypes[i], net->stages[stage_idx].input_shapes[i]);
+  }
+  for (int i = 0; i < net->output_num; i++) {
+    bmrt_tensor_with_device(
+        &out_tensors[i], net->stages[stage_idx].output_mems[i],
+        net->output_dtypes[i], net->stages[stage_idx].output_shapes[i]);
+  }
+  auto ret = bmrt_launch_tensor_ex(p_bmrt, net->name, in_tensors.data(),
+                                   net->input_num, out_tensors.data(),
+                                   net->output_num, true, false);
+  assert(ret);
+  bm_thread_sync(bm_handle);
+}
 void RWKV6::generate(const std::string &input_str) {
+  //
+  /** test code ***********************************/
   std::string input_str_ = input_str;
   std::vector<std::vector<uint32_t>> res;
   res = rwkv_tokenizer.encode(input_str_);
-
   // simple print
   std::cout << "\r\nstr2token=[";
   for (const auto &inner_vec : res) {
@@ -140,6 +250,19 @@ void RWKV6::generate(const std::string &input_str) {
   }
   std::cout << "]\r\n" << std::endl;
 
+  std::copy(res.begin(), res.end(), std::back_inserter(tokens_temp));
+
+  for (const auto &inner_vec : tokens_temp) {
+    std::cout << "[";
+    for (uint32_t val : inner_vec) {
+      std::cout << val << ", ";
+    }
+    std::cout << "]";
+  }
+  std::cout << "]\r\n" << std::endl;
+
+  rwkv_forward();
+
   std::vector<std::string> res_str;
   res_str = rwkv_tokenizer.decode(res);
   std::cout << "\r\ntoken2str=[";
@@ -147,6 +270,8 @@ void RWKV6::generate(const std::string &input_str) {
     std::cout << inner_str << " ";
   }
   std::cout << "]\r\n" << std::endl;
+
+  /** test code ***********************************/
 }
 void RWKV6::deinit() {
   // TODO bm_free_device && bmrt_destroy && bm_dev_free
@@ -229,8 +354,8 @@ void processArguments(int argc, char *argv[], std::string &model_path,
 int main(int argc, char **argv) {
   // set your bmodel path here
   printf("Demo for LLama2 in BM1684X\n");
-  std::string model_path = "../models/llama2-7b_int4_1dev.bmodel";
-  std::string tokenizer_path = "../support/tokenizer.model";
+  std::string model_path = "../models/rwkv6-1b5_bf16_1dev.bmodel";
+  std::string tokenizer_path = "../support/rwkv_vocab_v20230424.json";
   std::vector<int> devices = {11};
   processArguments(argc, argv, model_path, tokenizer_path, devices);
   if (model_path.empty()) {
