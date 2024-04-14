@@ -28,7 +28,7 @@ struct rwkv_state {
 class RWKV6 {
   // External Interface running on BM1684X
  public:
-  void init(const std::vector<int> &devid, std::string model_path,
+  void init(const std::vector<int> &devices, std::string model_path,
             std::string tokenizer_path);
   void deinit();
   // Normal chat interface
