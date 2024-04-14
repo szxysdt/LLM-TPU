@@ -18,6 +18,8 @@
 #include "rapidjson/prettywriter.h"  // for stringify JSON
 #include "rapidjson/stringbuffer.h"
 
+// TODO 性能优化(多线程、异步？)
+
 class Trie;
 
 struct add_val {
