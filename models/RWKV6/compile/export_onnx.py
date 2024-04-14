@@ -4,6 +4,7 @@ import argparse
 import os
 
 import torch
+# torch.set_printoptions(profile="full")
 from tqdm import tqdm
 
 from src.model import RWKV_RNN
@@ -18,7 +19,7 @@ class Embedding(torch.nn.Module):
         emb_out = origin_model.emb(input_ids).squeeze(1)
         ln_out = origin_model.manual_layer_norm(
             emb_out, origin_model.ln0_weight, origin_model.ln0_bias, 1e-5
-        )
+        ).unsqueeze(dim=0)
         return ln_out
 
 
@@ -47,9 +48,9 @@ class LmHead(torch.nn.Module):
         return m_logits
 
 
-def convert_block(layer_id):
+def convert_block(layer_id, verbose=False):
     model = Block(layer_id)
-    b_in = torch.zeros(model_args["batch_size"], EMB_DIM)
+    b_in = torch.zeros(model_args["batch_size"], 1, EMB_DIM)
     state = torch.randn(model_args["batch_size"], *STATE_SIZE)
     b_id = torch.tensor([layer_id], dtype=torch.int64)
 
@@ -57,7 +58,7 @@ def convert_block(layer_id):
         model,
         (b_in, state, b_id),
         f"{folder}/block_{layer_id}.onnx",
-        verbose=False,
+        verbose=verbose,
         input_names=["b_in", "state", "b_id"],
         output_names=["b_out"],
         do_constant_folding=True,
@@ -75,31 +76,46 @@ def convert_embedding():
         f"{folder}/embedding.onnx",
         verbose=False,
         input_names=["input_ids"],
-        output_names=["input_embed"],
+        output_names=["hidden_dim"],
         do_constant_folding=True,
         opset_version=15,
     )
 
 
+def test_emb():
+    model = Embedding()
+    input_ids = torch.tensor([[1922]]).long()
+    out = model(input_ids)
+    print(f"out {out}")
+
+
 def convert_lm_head():
     model = LmHead()
-    input = torch.randn(model_args["batch_size"], EMB_DIM)
+    input = torch.randn(model_args["batch_size"], 1, EMB_DIM)
 
     torch.onnx.export(
         model,
         (input),
         f"{folder}/lm_head.onnx",
         verbose=False,
-        input_names=["hidden_states"],
+        input_names=["hidden_dim"],
         output_names=["m_logits"],
         do_constant_folding=True,
         opset_version=15,
     )
 
 
+def test_lm_head():
+    model = LmHead()
+    input = torch.randn(model_args["batch_size"], 1, EMB_DIM)
+    out = model(input)
+    print(out)
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="export onnx.")
     parser.add_argument("--model_path", "-m", type=str, help="path to the torch model.")
+    parser.add_argument("--test", "-t", action="store_true", help="enable some tests.")
     # parser.add_argument('--model_path', type=str, help='path to the torch model.')
     # parser.add_argument('--seq_length', type=int, default=512, help="sequence length")
 
@@ -121,6 +137,8 @@ if __name__ == "__main__":
 
     NUM_LAYERS = origin_model.num_layer
     EMB_DIM = origin_model.n_embd
+    print("EMB_DIM")
+    print(EMB_DIM)
     STATE_SIZE = origin_model.state_size
     print(origin_model)
     print("Done.")
@@ -138,17 +156,24 @@ if __name__ == "__main__":
     )  # state_size是state输入的尺寸
     # 测试推理
     A, B = origin_model(example_token, example_state)
+
+    print(A)
+    if args.test:
+        test_emb()
+        # test_lm_head()
+        exit(0)
+
     # 导出模型
     print("\nExport Onnx...")
 
-    print(f'Convert block & block_cache')
+    print(f"Convert block & block_cache")
     for i in tqdm(range(NUM_LAYERS)):
         convert_block(i)
 
-    print(f'Convert embedding')
+    print(f"Convert embedding")
     convert_embedding()
 
-    print(f'Convert lm_head')
+    print(f"Convert lm_head")
     convert_lm_head()
 
     print(f"\nDone.\nOnnx weight has saved in {folder}")

@@ -105,7 +105,7 @@ pushd $outdir
 model_transform.py \
     --model_name lm_head \
     --model_def ../../onnx/lm_head.onnx \
-    --input_shapes [[1,${hidden_size}]] \
+    --input_shapes [[1,1,${hidden_size}]] \
     --mlir lm_head.mlir
 
 model_deploy.py \

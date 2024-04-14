@@ -345,7 +345,7 @@ class RWKV_RNN(nn.Module):
             x = self.ln0(x)
         else:
             x = self.manual_layer_norm(x, self.ln0_weight, self.ln0_bias, 1e-5)
-
+        x = x.unsqueeze(dim=0)
         for i, block in enumerate(self.blocks):
             x = block(x, state, i)
 
