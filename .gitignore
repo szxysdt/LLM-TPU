@@ -11,3 +11,4 @@ __pycache__
 *.pth
 !**/rapidjson/.keep
 rwkv6
+.idea/
