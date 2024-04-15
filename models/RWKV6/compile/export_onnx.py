@@ -4,10 +4,63 @@ import argparse
 import os
 
 import torch
-# torch.set_printoptions(profile="full")
+import torch.nn.functional as F
+
+torch.set_printoptions(profile="full")
 from tqdm import tqdm
 
 from src.model import RWKV_RNN
+
+
+def sample_logits(
+    out: torch.Tensor, temperature: float = 1.0, top_p: float = 0.8
+) -> torch.Tensor:
+    """
+    对模型输出的logits进行采样。
+
+    Args:
+        out (torch.Tensor): 模型输出的logits张量,形状为[Batch, vocab_size]。
+        temperature (float): 温度参数,用于调节采样的多样性,默认为1.0。
+        top_p (float): Top-p截断参数,用于稳定和控制采样概率分布,默认为0.8。
+
+    Returns:
+        torch.Tensor: 采样结果,形状为[Batch, 1],每个元素表示一个样本中采样得到的词的索引。
+    """
+    # 确保top_p和temperature都是非负值
+    top_p = max(0.0, min(1.0, top_p))
+    temperature = max(0.0, temperature)
+
+    # 将out转换为概率分布
+    probs = F.softmax(out, dim=-1)
+
+    # 根据top_p截断概率分布
+    sorted_probs, _ = torch.sort(probs, descending=True)
+    cumulative_probs = torch.cumsum(sorted_probs, dim=-1)
+    cutoff_mask = (cumulative_probs > top_p).float()
+    cutoff_index = torch.argmax(
+        cutoff_mask
+        * torch.arange(cutoff_mask.shape[-1], device=cutoff_mask.device).float(),
+        dim=-1,
+    )
+    cutoff_values = sorted_probs.gather(-1, cutoff_index.unsqueeze(-1)).squeeze(-1)
+    probs = torch.where(
+        probs < cutoff_values.unsqueeze(-1), torch.zeros_like(probs), probs
+    )
+
+    # 对概率分布进行温度调节
+    if temperature != 1.0:
+        probs = torch.pow(probs, 1.0 / temperature)
+
+    # 归一化概率分布
+    probs /= torch.sum(probs, dim=-1, keepdim=True)
+
+    # 如果top_p为0,则选择概率最大的位置;否则按照概率分布随机采样
+    if top_p != 0:
+        sampled_indices = torch.multinomial(probs, num_samples=1)
+    else:
+        sampled_indices = torch.argmax(probs, dim=-1, keepdim=True)
+
+    return sampled_indices
 
 
 class Embedding(torch.nn.Module):
@@ -19,7 +72,7 @@ class Embedding(torch.nn.Module):
         emb_out = origin_model.emb(input_ids).squeeze(1)
         ln_out = origin_model.manual_layer_norm(
             emb_out, origin_model.ln0_weight, origin_model.ln0_bias, 1e-5
-        ).unsqueeze(dim=0)
+        )
         return ln_out
 
 
@@ -52,7 +105,8 @@ def convert_block(layer_id, verbose=False):
     model = Block(layer_id)
     b_in = torch.zeros(model_args["batch_size"], 1, EMB_DIM)
     state = torch.randn(model_args["batch_size"], *STATE_SIZE)
-    b_id = torch.tensor([layer_id], dtype=torch.int64)
+    b_id = torch.tensor([layer_id]).long()
+    # b_id = layer_id
 
     torch.onnx.export(
         model,
@@ -84,9 +138,9 @@ def convert_embedding():
 
 def test_emb():
     model = Embedding()
-    input_ids = torch.tensor([[1922]]).long()
+    input_ids = torch.tensor([[74]]).long()
     out = model(input_ids)
-    print(f"out {out}")
+    print(f"out {out} {out.shape}")
 
 
 def convert_lm_head():
@@ -110,6 +164,23 @@ def test_lm_head():
     input = torch.randn(model_args["batch_size"], 1, EMB_DIM)
     out = model(input)
     print(out)
+
+
+def test_all(token_id, state):
+    embedding = Embedding()
+    x = embedding(token_id)
+
+    for i in range(NUM_LAYERS):
+        print(i)
+        block = Block(i)
+        print(x.shape)
+        x = block(x, state, i)
+
+    lm_head = LmHead()
+    logits = lm_head(x)
+    print(logits.shape)
+    new_token_id = sample_logits(logits[0],1,0)
+    print([new_token_id])
 
 
 if __name__ == "__main__":
@@ -148,18 +219,24 @@ if __name__ == "__main__":
         param.requires_grad = False
 
     # 准备输入数据的示例
-    example_token = torch.zeros(
-        model_args["batch_size"], 1
-    ).long()  # token输入的尺寸 [batch, 1]
-    example_state = torch.randn(
+    # example_token = torch.zeros(
+    #     model_args["batch_size"], 1
+    # ).long()  # token输入的尺寸 [batch, 1]
+    example_token = torch.tensor([[74]]).long()  # token "hi"
+    example_state = torch.zeros(
         model_args["batch_size"], *origin_model.state_size
     )  # state_size是state输入的尺寸
     # 测试推理
     A, B = origin_model(example_token, example_state)
 
-    print(A)
+    print(f"output is {sample_logits(A,1,0)}")
+    # print(f"state is {B}")
     if args.test:
-        test_emb()
+        test_all(
+            torch.tensor([[74]]).long(),
+            torch.zeros(model_args["batch_size"], *origin_model.state_size),
+        )
+        # test_emb()
         # test_lm_head()
         exit(0)
 
@@ -169,6 +246,7 @@ if __name__ == "__main__":
     print(f"Convert block & block_cache")
     for i in tqdm(range(NUM_LAYERS)):
         convert_block(i)
+        exit()
 
     print(f"Convert embedding")
     convert_embedding()
