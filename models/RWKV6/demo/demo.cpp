@@ -37,7 +37,7 @@ void dump_tensor(bm_handle_t bm_handle, bm_tensor_t &tensor) {
     size *= shape.dims[i];
   }
   std::vector<uint16_t> data(size);
-  bm_memcpy_d2s(bm_handle, data.data(), tensor.device_mem);
+  bm_memcpy_d2s(bm_handle, (void *)data.data(), tensor.device_mem);
   std::cout << data[0] << "\t" << data[data.size() - 1] << std::endl;
   auto ptr = data.data();
   ptr[0] = ptr[0];
@@ -125,7 +125,9 @@ class RWKV6 {
 };
 
 void RWKV6::d2d(bm_device_mem_t &dst, bm_device_mem_t &src) {
-  bm_memcpy_d2d_byte(bm_handle, dst, 0, src, 0, bm_mem_get_device_size(src));
+  auto status = bm_memcpy_d2d_byte(bm_handle, dst, 0, src, 0,
+                                   bm_mem_get_device_size(src));
+  assert(status == BM_SUCCESS);
 }
 
 /**
@@ -189,7 +191,6 @@ void RWKV6::init(const std::vector<int> &devices, std::string model_path,
 void RWKV6::net_launch(const bm_net_info_t *net, int stage_idx) {
   std::vector<bm_tensor_t> in_tensors(net->input_num);
   std::vector<bm_tensor_t> out_tensors(net->output_num);
-  std::cout << "net->output_num " << net->output_num << std::endl;
 
   for (int i = 0; i < net->input_num; i++) {
     bmrt_tensor_with_device(
@@ -242,53 +243,97 @@ void RWKV6::rwkv_forward() {
   // int tta = 1922;
   // uint16_t tta1 = fp32_to_bf16_bits(tta);
   // 准备输入数据
+  // TODO 这里之后写个for i < tokens_temp.size() .....用于推理整个缓存
   std::vector<int> input_data(tokens_temp[0].begin(), tokens_temp[0].end());
 
   // 初始化emb的输入内存
   auto &emb_in_mem = net_embed->stages[0].input_mems[0];
   // out_mem这东西后面会改变，会变成后面的block的输出
-  auto &out_mem = net_embed->stages[0].output_mems[0];
+  auto &emb_out_mem = net_embed->stages[0].output_mems[0];
   bm_memcpy_s2d(bm_handle, emb_in_mem, (void *)input_data.data());
-
-  std::cout << "dump_int_tensor[";
-  dump_int_tensor(bm_handle, emb_in_mem, 0, 1);
-  std::cout << "]dump_int_tensor" << std::endl;
-
   net_launch(net_embed);
+
+  // std::cout << "\ndump_int_tensor[";
+  // dump_int_tensor(bm_handle, emb_in_mem, 0, 1);
+  // std::cout << "]dump_int_tensor\n" << std::endl;
 
   // TODO get embedding dim in init
 
   // test code for fp32-bf16
-  std::vector<uint16_t> test_cache(2048, 0);
-  std::vector<float> test_cache2(2048, 0);
-  bm_memcpy_d2s(bm_handle, test_cache.data(), out_mem);
-  for (int i = 0; i < test_cache.size(); i++) {
-    test_cache2[i] = fp32_to_bf16_bits(test_cache[i]);
-  }
-  bm_memcpy_s2d(bm_handle, out_mem, (void *)test_cache2.data());
+  // std::cout << "\ndump_fp16_tensor[";
+  // dump_fp16_tensor(bm_handle, emb_out_mem, 0, 50);
+  // std::cout << "]dump_fp16_tensor\n" << std::endl;
 
-  // std::cout << "dump_fp32_tensor[";
-  // dump_fp32_tensor(bm_handle, out_mem, 0, 2048);
-  // std::cout << "]dump_fp32_tensor" << std::endl;
+  std::vector<uint16_t> test_cache(2048, 0);
+  std::vector<uint16_t> test_cache2(2048, 0);
+  bm_memcpy_d2s(bm_handle, (void *)test_cache.data(), emb_out_mem);
+  for (int i = 0; i < test_cache.size(); i++) {
+    test_cache2[i] = fp32_to_bf16_bits(fp16_ieee_to_fp32_bits(test_cache[i]));
+  }
+
+  for (auto data2 : test_cache2) {
+    uint32_t out = bf16_to_fp32_bits(data2);
+  }
+
+  // 循环外提前分配第一个block的输入mem
+  auto &in0_mem = net_blocks[0]->stages[0].input_mems[0];
+  bm_memcpy_s2d(bm_handle, in0_mem, (void *)test_cache2.data());
+  // 看一眼拷了些啥子
+  // std::cout << "\nin0_mem[";
+  // dump_bf16_tensor(bm_handle, in0_mem, 0, 50);
+  // std::cout << "]in0_mem\n" << std::endl;
 
   // forward blocks
-  // for (int idx = 0; idx < NUM_LAYERS; idx++) {
-  for (int idx = 0; idx < 5; idx++) {
-    auto &in0_mem = net_blocks[idx]->stages[0].input_mems[0];
-    auto &in1_mem = net_blocks[idx]->stages[0].input_mems[1];
-    d2d(in0_mem, out_mem);
+  for (int idx = 0; idx < NUM_LAYERS; idx++) {
+
+    // 分配输入映射
+    auto &in0_mem = net_blocks[idx]->stages[0].input_mems[0];  // input emb
+    auto &in1_mem = net_blocks[idx]->stages[0].input_mems[1];  // state
+    // 分配输出映射
+    // auto &out0_mem = net_blocks[idx]->stages[0].output_mems[0];  // output
+    // emb auto &out1_mem = net_blocks[idx]->stages[0].output_mems[1];  // state
+
+    // 拷贝数据
     if (idx == 0) {
+      // TODO 把外面的fp32-bf16转换塞进循环？看情况而定...
+
       // 初始化状态
-      bm_memcpy_s2d(bm_handle, in1_mem, (void *)state_init_data.data());
+
+      // d2d(in0_mem, emb_out_mem);
+      auto status =
+          bm_memcpy_s2d(bm_handle, in1_mem, (void *)state_init_data.data());
+      assert(status == BM_SUCCESS);
+      std::cout << "id == i copy ok" << std::endl;
+
+    } else {
+      // 映射上一个block的输出(output + state)
+      auto &_out0_mem = net_blocks[idx - 1]->stages[0].output_mems[0];
+      auto &_out1_mem = net_blocks[idx - 1]->stages[0].output_mems[1];
+      auto aa_out1_mem = net_blocks[idx - 1]->stages[0].output_shapes->dims[0];
+      std::cout << "_out1_mem " << aa_out1_mem << std::endl;
+      
+
+      // 从第二个block开始拷贝输出内容到输入
+      d2d(in0_mem, _out0_mem);
+      d2d(in1_mem, _out1_mem);
+      std::cout << "copy ok id==" << idx << std::endl;
     }
+    // dump inputs of a block
+    std::cout << "id=" << idx << "\nin0_mem[";
+    dump_bf16_tensor(bm_handle, in0_mem, 0, 20);
+    std::cout << "]in0_mem\n" << std::endl;
+    // std::cout << "id=" << idx << "\nin1_mem[";
+    // dump_bf16_tensor(bm_handle, in1_mem, 0, 20);
+    // std::cout << "]in1_mem\n" << std::endl;
+
+    // 开炮
     net_launch(net_blocks[idx]);
-    std::cout << "out_mem[";
-    dump_fp32_tensor(bm_handle, out_mem, 0, 20);
-    std::cout << "]out_mem" << std::endl;
-    out_mem = net_blocks[idx]->stages[0].output_mems[0];
   }
   // TODO 实现状态缓存和RNN推理
-  exit(0);
+  // exit(0);
+
+  // 映射最后block的输出
+  auto &out_mem = net_blocks[NUM_LAYERS - 1]->stages[0].output_mems[0];
 
   // lm_head
   auto &lm_in_mem = net_lm_head->stages[0].input_mems[0];
@@ -296,21 +341,15 @@ void RWKV6::rwkv_forward() {
   d2d(lm_in_mem, out_mem);
   net_launch(net_lm_head);
   // dump tensor
-  std::cout << "lm_out_mem[";
+  std::cout << "\nlm_out_mem[";
   dump_fp32_tensor(bm_handle, lm_out_mem, 0, 50);
-  std::cout << "]lm_out_mem" << std::endl;
+  std::cout << "]lm_out_mem\n" << std::endl;
 
   // sample logits
   int token = 0;
 
-  // print("output_zero_point", net_embed->stages->input_shapes);
-  // print("output_zero_point", net_embed->stages);
 
-  // auto test = net_embed->stages[0].output_shapes[0];
-  // print_dims(test);
 
-  // dump_bf16_tensor(bm_handle,emb_out_mem,0,2048);
-  // std::cout << "test " << test << std::endl;
 
   // for (int i = 0; i < stage_info.output_shapes->num_dims; ++i) {
   //   std::cout << stage_info.output_shapes->dims[i] << " ";
@@ -373,8 +412,10 @@ void RWKV6::generate(const std::string &input_str) {
   }
   std::cout << "]\r\n" << std::endl;
   // copy token_ids2temp_cache
+  tokens_temp.clear();
   std::copy(res.begin(), res.end(), std::back_inserter(tokens_temp));
 
+  std::cout << "\r\ntokens_temp=[";
   for (const auto &inner_vec : tokens_temp) {
     std::cout << "[";
     for (uint32_t val : inner_vec) {
@@ -398,7 +439,15 @@ void RWKV6::generate(const std::string &input_str) {
 }
 void RWKV6::deinit() {
   // TODO bm_free_device && bmrt_destroy && bm_dev_free
-
+  // if (false == io_alone) {
+  // for (int i = 0; i < NUM_LAYERS; i++) {
+  //   bm_free_device(bm_handle, state[i]);
+  // }
+  // }
+  bmrt_destroy(p_bmrt);
+  for (auto h : handles) {
+    bm_dev_free(h);
+  }
   return;
 }
 

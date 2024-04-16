@@ -9,11 +9,13 @@
  *    without the express written permission of Sophgo Technologies Inc.
  *
  *****************************************************************************/
-#include "bmruntime_interface.h"
-#include <vector>
+#include <iostream>
 #include <string>
+#include <vector>
 
-inline uint16_t fp32_to_fp16_bits(float f) {
+#include "bmruntime_interface.h"
+
+inline uint16_t fp32_to_fp16_bits(uint32_t f) {
   uint32_t x = *((uint32_t *)&f);
   uint16_t h = ((x >> 16) & 0x8000) |
                ((((x & 0x7f800000) - 0x38000000) >> 13) & 0x7c00) |
@@ -22,9 +24,9 @@ inline uint16_t fp32_to_fp16_bits(float f) {
   return h;
 }
 
-inline uint16_t fp32_to_bf16_bits(float f) {
+inline uint16_t fp32_to_bf16_bits(uint32_t f) {
   uint32_t x = *((uint32_t *)&f);
-  uint16_t h = (x >> 16);
+  uint16_t h = (x >> 16) & 0xFFFF;
 
   return h;
 }
@@ -33,9 +35,9 @@ typedef union {
   float fval;
   uint32_t bits;
   struct {
-    uint32_t frac : 23; // mantissa
-    uint32_t exp : 8;   // exponent
-    uint32_t sign : 1;  // sign
+    uint32_t frac : 23;  // mantissa
+    uint32_t exp : 8;    // exponent
+    uint32_t sign : 1;   // sign
   } format;
 } fp32;
 
@@ -43,14 +45,16 @@ static inline uint32_t bf16_to_fp32_bits(uint16_t h) {
   // BF16 的位模式是：1 位符号，8 位指数，7 位尾数
   // 我们需要将其转换为 float 的位模式：1 位符号，8 位指数，23 位尾数
   // 扩展 BF16 到 32 位，尾数部分需要填充 16 位的 0
-  uint32_t sign = (uint32_t)(h & 0x8000) << 16; // 符号位
-  uint32_t exp = (uint32_t)(h & 0x7F80) << 16;  // 指数位
-  uint32_t frac = (uint32_t)(h & 0x007F) << 16; // 尾数位
+  uint32_t sign = (uint32_t)(h & 0x8000) << 16;  // 符号位
+  uint32_t exp = (uint32_t)(h & 0x7F80) << 16;   // 指数位
+  uint32_t frac = (uint32_t)(h & 0x007F) << 16;  // 尾数位
 
   // 将尾数的 7 位左移，以对齐到 23 位尾数的位置
-  frac <<= (23 - 7);
+  // frac <<= (23 - 7);
 
   // 组合成 float 的位模式
+  // uint32_t exp = 0x00000000;
+  // uint32_t frac = 0x00000000;
   return sign | exp | frac;
 }
 
@@ -194,4 +198,29 @@ void dump_int_tensor(bm_handle_t bm_handle, bm_device_mem_t mem, int offset,
   std::cout << "-------------------------------------" << std::endl;
   auto ptr = data.data();
   ptr[0] = ptr[0];
+}
+
+void bits_print(uint32_t num) {
+  for (int i = 31; i >= 0; --i) {
+    std::cout << ((num >> i) & 1);
+    if (i % 8 == 0) std::cout << " ";
+  }
+  std::cout << std::endl;
+}
+
+// void bits_print(float num) {
+
+//     for (int i = 31; i >= 0; --i) {
+//         std::cout << ((num >> i) & 1);
+//         if (i % 8 == 0) std::cout << " ";
+//     }
+//     std::cout << std::endl;
+// }
+
+void bits_print(uint16_t num) {
+  for (int i = 15; i >= 0; --i) {
+    std::cout << ((num >> i) & 1);
+    if (i % 8 == 0) std::cout << " ";
+  }
+  std::cout << std::endl;
 }
