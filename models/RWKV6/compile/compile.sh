@@ -61,8 +61,10 @@ if [ x$mode == x"bf16" ]; then
     quantize_args="--quantize BF16"
 elif [ x$mode == x"f32" ]; then
     quantize_args="--quantize F32"
+elif [ x$mode == x"f16" ]; then
+    quantize_args="--quantize F16"
 else
-    echo "Error, unknown quantize mode (Now only support BF16/F32)"
+    echo "Error, unknown quantize mode (Now only support F16/BF16/F32)"
     exit 1
 fi
 
@@ -84,7 +86,7 @@ model_transform.py \
     --mlir embedding.mlir
 model_deploy.py \
     --mlir embedding.mlir \
-    --quantize F32 \
+    --quantize F16 \
     --quant_input \
     --quant_output \
     --chip bm1684x \
