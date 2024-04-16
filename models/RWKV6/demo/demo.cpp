@@ -208,10 +208,6 @@ void RWKV6::net_launch(const bm_net_info_t *net, int stage_idx) {
   assert(ret);
   auto status = bm_thread_sync(bm_handle);
   assert(status == BM_SUCCESS);
-  // dump_fp32_tensor(bm_handle,net->ou)
-  // for (auto &tensor:out_tensors){
-  // dump_tensor(bm_handle,tensor);
-  // }
 }
 
 void print_dims(const bm_shape_t &shape) {
@@ -236,34 +232,17 @@ void RWKV6::rwkv_forward() {
   std::vector<uint16_t> state_init_data(STATE_SIZE_1 * STATE_SIZE_2,
                                         STATE_INIT_DATA);
 
-  auto stage = net_embed->stage_num;
-  std::cout << "stage " << stage << std::endl;
-  // std::vector<int> input_data = {1922};
-
-  // int tta = 1922;
-  // uint16_t tta1 = fp32_to_bf16_bits(tta);
   // 准备输入数据
   // TODO 这里之后写个for i < tokens_temp.size() .....用于推理整个缓存
   std::vector<int> input_data(tokens_temp[0].begin(), tokens_temp[0].end());
 
   // 初始化emb的输入内存
   auto &emb_in_mem = net_embed->stages[0].input_mems[0];
-  // out_mem这东西后面会改变，会变成后面的block的输出
   auto &emb_out_mem = net_embed->stages[0].output_mems[0];
   bm_memcpy_s2d(bm_handle, emb_in_mem, (void *)input_data.data());
   net_launch(net_embed);
 
-  // std::cout << "\ndump_int_tensor[";
-  // dump_int_tensor(bm_handle, emb_in_mem, 0, 1);
-  // std::cout << "]dump_int_tensor\n" << std::endl;
-
-  // TODO get embedding dim in init
-
-  // test code for fp32-bf16
-  // std::cout << "\ndump_fp16_tensor[";
-  // dump_fp16_tensor(bm_handle, emb_out_mem, 0, 50);
-  // std::cout << "]dump_fp16_tensor\n" << std::endl;
-
+  // TODO get embedding dim in init (replace 2048)
   std::vector<uint16_t> test_cache(2048, 0);
   std::vector<uint16_t> test_cache2(2048, 0);
   bm_memcpy_d2s(bm_handle, (void *)test_cache.data(), emb_out_mem);
@@ -271,21 +250,12 @@ void RWKV6::rwkv_forward() {
     test_cache2[i] = fp32_to_bf16_bits(fp16_ieee_to_fp32_bits(test_cache[i]));
   }
 
-  for (auto data2 : test_cache2) {
-    uint32_t out = bf16_to_fp32_bits(data2);
-  }
-
   // 循环外提前分配第一个block的输入mem
   auto &in0_mem = net_blocks[0]->stages[0].input_mems[0];
   bm_memcpy_s2d(bm_handle, in0_mem, (void *)test_cache2.data());
-  // 看一眼拷了些啥子
-  // std::cout << "\nin0_mem[";
-  // dump_bf16_tensor(bm_handle, in0_mem, 0, 50);
-  // std::cout << "]in0_mem\n" << std::endl;
 
   // forward blocks
   for (int idx = 0; idx < NUM_LAYERS; idx++) {
-
     // 分配输入映射
     auto &in0_mem = net_blocks[idx]->stages[0].input_mems[0];  // input emb
     auto &in1_mem = net_blocks[idx]->stages[0].input_mems[1];  // state
@@ -298,11 +268,7 @@ void RWKV6::rwkv_forward() {
       // TODO 把外面的fp32-bf16转换塞进循环？看情况而定...
 
       // 初始化状态
-
-      // d2d(in0_mem, emb_out_mem);
-      auto status =
-          bm_memcpy_s2d(bm_handle, in1_mem, (void *)state_init_data.data());
-      assert(status == BM_SUCCESS);
+      bm_memcpy_s2d(bm_handle, in1_mem, (void *)state_init_data.data());
       std::cout << "id == i copy ok" << std::endl;
 
     } else {
@@ -311,7 +277,6 @@ void RWKV6::rwkv_forward() {
       auto &_out1_mem = net_blocks[idx - 1]->stages[0].output_mems[1];
       auto aa_out1_mem = net_blocks[idx - 1]->stages[0].output_shapes->dims[0];
       std::cout << "_out1_mem " << aa_out1_mem << std::endl;
-      
 
       // 从第二个block开始拷贝输出内容到输入
       d2d(in0_mem, _out0_mem);
@@ -319,18 +284,11 @@ void RWKV6::rwkv_forward() {
       std::cout << "copy ok id==" << idx << std::endl;
     }
     // dump inputs of a block
-    std::cout << "id=" << idx << "\nin0_mem[";
-    dump_bf16_tensor(bm_handle, in0_mem, 0, 20);
-    std::cout << "]in0_mem\n" << std::endl;
-    // std::cout << "id=" << idx << "\nin1_mem[";
-    // dump_bf16_tensor(bm_handle, in1_mem, 0, 20);
-    // std::cout << "]in1_mem\n" << std::endl;
 
     // 开炮
     net_launch(net_blocks[idx]);
   }
   // TODO 实现状态缓存和RNN推理
-  // exit(0);
 
   // 映射最后block的输出
   auto &out_mem = net_blocks[NUM_LAYERS - 1]->stages[0].output_mems[0];
@@ -341,30 +299,10 @@ void RWKV6::rwkv_forward() {
   d2d(lm_in_mem, out_mem);
   net_launch(net_lm_head);
   // dump tensor
-  std::cout << "\nlm_out_mem[";
   dump_fp32_tensor(bm_handle, lm_out_mem, 0, 50);
-  std::cout << "]lm_out_mem\n" << std::endl;
 
   // sample logits
   int token = 0;
-
-
-
-
-  // for (int i = 0; i < stage_info.output_shapes->num_dims; ++i) {
-  //   std::cout << stage_info.output_shapes->dims[i] << " ";
-  // }
-  // std::cout << std::endl;
-  // auto test=net_embed->stages[0].output_shapes;
-  // std::cout << "test " << test << std::endl;
-  // std::vector<std::vector<float>> b_in;
-  // bm_memcpy_d2s(bm_handle, (void *)&b_in, emb_out_mem);
-  // for (const auto &inner_vec : b_in) {
-  //   for (uint32_t val : inner_vec) {
-  //     std::cout << val << " ";
-  //   }
-  //   std::cout << std::endl;
-  // }
 
   return;
 }
