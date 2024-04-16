@@ -6,7 +6,7 @@ import os
 import torch
 import torch.nn.functional as F
 
-torch.set_printoptions(profile="full")
+torch.set_printoptions(profile="default", edgeitems=50, linewidth=200)
 from tqdm import tqdm
 
 from src.model import RWKV_RNN
@@ -84,8 +84,8 @@ class Block(torch.nn.Module):
         self.layer = origin_model.blocks[layer_id]
 
     def forward(self, b_in, state, b_id):
-        b_out = self.layer(b_in, state, b_id)
-        return b_out
+        b_out, state = self.layer(b_in, state, b_id)
+        return b_out, state
 
 
 class LmHead(torch.nn.Module):
@@ -103,9 +103,9 @@ class LmHead(torch.nn.Module):
 
 def convert_block(layer_id, verbose=False):
     model = Block(layer_id)
-    b_in = torch.zeros(model_args["batch_size"], 1, EMB_DIM)
+    b_in = torch.zeros(model_args["batch_size"], EMB_DIM)
     state = torch.randn(model_args["batch_size"], *STATE_SIZE)
-    b_id = torch.tensor([layer_id]).long()
+    b_id = torch.tensor(layer_id).long()
     # b_id = layer_id
 
     torch.onnx.export(
@@ -114,7 +114,7 @@ def convert_block(layer_id, verbose=False):
         f"{folder}/block_{layer_id}.onnx",
         verbose=verbose,
         input_names=["b_in", "state", "b_id"],
-        output_names=["b_out"],
+        output_names=["b_out", "state"],
         do_constant_folding=True,
         opset_version=15,
     )
@@ -145,7 +145,7 @@ def test_emb():
 
 def convert_lm_head():
     model = LmHead()
-    input = torch.randn(model_args["batch_size"], 1, EMB_DIM)
+    input = torch.randn(model_args["batch_size"], EMB_DIM)
 
     torch.onnx.export(
         model,
@@ -169,18 +169,23 @@ def test_lm_head():
 def test_all(token_id, state):
     embedding = Embedding()
     x = embedding(token_id)
+    print(f"emb out =\n{x}")
 
     for i in range(NUM_LAYERS):
-        print(i)
         block = Block(i)
-        print(x.shape)
-        x = block(x, state, i)
+        i = torch.tensor([i]).long()
+        x, state = block(x, state, i)
+        # print(f"\nblock {i} out =\n{x}\n")
+        print(f"block {i} state =\n{torch.min(state)}\n{torch.max(state)}")
+        # print(f"block {i} state =\n{state}")
 
     lm_head = LmHead()
     logits = lm_head(x)
     print(logits.shape)
-    new_token_id = sample_logits(logits[0],1,0)
-    print([new_token_id])
+    print(f"logits {torch.min(logits)}\n{torch.max(logits)}")
+    new_token_id = sample_logits(logits[0], 1, 0)
+    print(new_token_id)
+    print(logits[0][new_token_id])
 
 
 if __name__ == "__main__":
@@ -222,7 +227,7 @@ if __name__ == "__main__":
     # example_token = torch.zeros(
     #     model_args["batch_size"], 1
     # ).long()  # token输入的尺寸 [batch, 1]
-    example_token = torch.tensor([[74]]).long()  # token "hi"
+    example_token = torch.tensor([[1922]]).long()  # token "hi"
     example_state = torch.zeros(
         model_args["batch_size"], *origin_model.state_size
     )  # state_size是state输入的尺寸
@@ -233,7 +238,7 @@ if __name__ == "__main__":
     # print(f"state is {B}")
     if args.test:
         test_all(
-            torch.tensor([[74]]).long(),
+            torch.tensor([[1922]]).long(),
             torch.zeros(model_args["batch_size"], *origin_model.state_size),
         )
         # test_emb()
@@ -246,7 +251,7 @@ if __name__ == "__main__":
     print(f"Convert block & block_cache")
     for i in tqdm(range(NUM_LAYERS)):
         convert_block(i)
-        exit()
+        # exit()
 
     print(f"Convert embedding")
     convert_embedding()
