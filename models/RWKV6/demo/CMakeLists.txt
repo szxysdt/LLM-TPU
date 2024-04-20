@@ -8,6 +8,7 @@ if (NOT DEFINED TARGET_ARCH)
 endif()
 
 include_directories(${PROJECT_SOURCE_DIR}/../support/include)
+include_directories(${PROJECT_SOURCE_DIR}/inc)
 
 if (${CMAKE_HOST_SYSTEM_PROCESSOR} STREQUAL "aarch64")
 	add_definitions(-DSOC_TARGET)
@@ -32,5 +33,7 @@ add_definitions(-DDEBUG --std=c++17 -fPIC -Wall)
 set(CMAKE_BUILD_TYPE "Debug")
 # set(CMAKE_BUILD_TYPE "Release")
 
-add_executable(rwkv6 demo.cpp)
+file(GLOB_RECURSE SRCS ${PROJECT_SOURCE_DIR}/src/*.cpp)
+
+add_executable(rwkv6 demo.cpp ${SRCS})
 target_link_libraries(rwkv6 bmlib bmrt)
