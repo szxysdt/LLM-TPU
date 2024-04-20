@@ -76,50 +76,6 @@ class Embedding(torch.nn.Module):
         return ln_out
 
 
-class Block(torch.nn.Module):
-
-    def __init__(self, layer_id):
-        super().__init__()
-        self.layer_id = layer_id
-        self.layer = origin_model.blocks[layer_id]
-
-    def forward(self, b_in, state, b_id):
-        b_out, state = self.layer(b_in, state, b_id)
-        return b_out, state
-
-
-class LmHead(torch.nn.Module):
-
-    def __init__(self):
-        super().__init__()
-
-    def forward(self, b_out):
-        head_in = origin_model.manual_layer_norm(
-            b_out, origin_model.ln_out_weight, origin_model.ln_out_bias, 1e-5
-        )
-        m_logits = origin_model.head(head_in)
-        return m_logits
-
-
-def convert_block(layer_id, verbose=False):
-    model = Block(layer_id)
-    b_in = torch.zeros(model_args["batch_size"], EMB_DIM)
-    state = torch.randn(model_args["batch_size"], *STATE_SIZE)
-    b_id = torch.tensor(layer_id).long()
-    # b_id = layer_id
-
-    torch.onnx.export(
-        model,
-        (b_in, state, b_id),
-        f"{folder}/block_{layer_id}.onnx",
-        verbose=verbose,
-        input_names=["b_in", "state", "b_id"],
-        output_names=["b_out", "state"],
-        do_constant_folding=True,
-        opset_version=15,
-    )
-
-
 def convert_embedding():
     model = Embedding()
     input_ids = torch.zeros(model_args["batch_size"], 1).long()
@@ -143,6 +99,57 @@ def test_emb():
     print(f"out {out} {out.shape}")
 
 
+class Block(torch.nn.Module):
+
+    def __init__(self, layer_id):
+        super().__init__()
+        self.layer_id = layer_id
+        self.layer = origin_model.blocks[layer_id]
+
+    def forward(self, b_in, state, b_id):
+        b_out, state = self.layer(b_in, state, b_id)
+        return b_out, state
+
+
+def convert_block(layer_id, verbose=False):
+    model = Block(layer_id)
+    b_in = torch.zeros(model_args["batch_size"], EMB_DIM)
+    state = torch.randn(model_args["batch_size"], *STATE_SIZE)
+    b_id = torch.tensor(layer_id).long()
+    # b_id = layer_id
+
+    torch.onnx.export(
+        model,
+        (b_in, state, b_id),
+        f"{folder}/block_{layer_id}.onnx",
+        verbose=verbose,
+        input_names=["b_in", "state", "b_id"],
+        output_names=["b_out", "state"],
+        do_constant_folding=True,
+        opset_version=15,
+    )
+
+
+class LmHead(torch.nn.Module):
+
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, b_out):
+        head_in = origin_model.manual_layer_norm(
+            b_out, origin_model.ln_out_weight, origin_model.ln_out_bias, 1e-5
+        )
+        m_logits = origin_model.head(head_in)
+        return m_logits
+
+
+def test_lm_head():
+    model = LmHead()
+    input = torch.randn(model_args["batch_size"], 1, EMB_DIM)
+    out = model(input)
+    print(out)
+
+
 def convert_lm_head():
     model = LmHead()
     input = torch.randn(model_args["batch_size"], EMB_DIM)
@@ -159,11 +166,31 @@ def convert_lm_head():
     )
 
 
-def test_lm_head():
-    model = LmHead()
-    input = torch.randn(model_args["batch_size"], 1, EMB_DIM)
-    out = model(input)
-    print(out)
+# refs:https://github.com/sophgo/LLM-TPU/blob/main/models/Llama2/compile/export_onnx.py
+class GreedyHead(torch.nn.Module):
+
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, m_logits):
+        _, token = torch.topk(m_logits.float(), 1)
+        return token
+
+
+def convert_greedy_head():
+    model = GreedyHead()
+    m_logits = torch.randn(1, VOCAB_SIZE)
+
+    torch.onnx.export(
+        model,
+        (m_logits),
+        f"{folder}/greedy_head.onnx",
+        verbose=False,
+        input_names=["m_logits"],
+        output_names=["token"],
+        do_constant_folding=True,
+        opset_version=15,
+    )
 
 
 def test_all(token_id, state):
@@ -211,6 +238,7 @@ if __name__ == "__main__":
     print(f"Loading model {model_args['MODEL_NAME']}.pth...")
     origin_model = RWKV_RNN(model_args)
 
+    VOCAB_SIZE = origin_model.args["vocab_size"]
     NUM_LAYERS = origin_model.num_layer
     EMB_DIM = origin_model.n_embd
     print("EMB_DIM")
