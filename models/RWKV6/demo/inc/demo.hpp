@@ -20,7 +20,7 @@ class RWKV6 {
   // External Interface running on BM1684X
  public:
   void init(const std::vector<int> &devices, std::string model_path,
-            std::string tokenizer_path);
+            std::string tokenizer_path, const std::string &__generation_mode);
   void deinit();
   // Normal chat interface
   void chat_rwkv();
@@ -29,10 +29,11 @@ class RWKV6 {
 
   // Internal implementation
  private:
-  void net_launch(const bm_net_info_t *net, uint32_t stage_idx = 0);
-  //   void net_launch(const bm_net_info_t *net, uint32_t stage_idx, std::string
-  //   io);
   inline void d2d(bm_device_mem_t &dst, bm_device_mem_t &src);
+  void net_launch(const bm_net_info_t *net, uint32_t stage_idx = 0);
+  void head_launch(const bm_net_info_t *net, bm_device_mem_t &logits_mem);
+  int greedy_search(const bm_net_info_t *net, bm_device_mem_t &logits_mem);
+  // int penalty_sample(const bm_net_info_t *net, bm_device_mem_t &logits_mem);
 
   /**
    * Preprocessing of forward processes
@@ -57,6 +58,7 @@ class RWKV6 {
 
  public:
   int NUM_LAYERS = 0;
+  std::string generation_mode;
 
  private:
   //  模型句柄
@@ -71,6 +73,7 @@ class RWKV6 {
   std::vector<const bm_net_info_t *> net_blocks;
   const bm_net_info_t *net_embed;
   const bm_net_info_t *net_lm_head;
+  const bm_net_info_t *net_greedy_head;
 
   // 内部变量
   const uint16_t STATE_INIT_DATA = 0x0000;

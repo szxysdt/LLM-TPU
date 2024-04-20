@@ -9,11 +9,17 @@
  *    without the express written permission of Sophgo Technologies Inc.
  *
  *****************************************************************************/
+#include <cmath>
 #include <iostream>
 #include <string>
 #include <vector>
 
 #include "bmruntime_interface.h"
+
+void bits_print(uint16_t num);
+void bits_print(uint32_t num);
+void dump_bf16_tensor(bm_handle_t bm_handle, bm_device_mem_t mem, int offset,
+                      int size, int show = 5);
 
 inline uint16_t fp32_to_fp16_bits(uint32_t f) {
   uint32_t x = *((uint32_t *)&f);
@@ -24,12 +30,50 @@ inline uint16_t fp32_to_fp16_bits(uint32_t f) {
   return h;
 }
 
-inline uint16_t fp32_to_bf16_bits(uint32_t f) {
-  uint32_t x = *((uint32_t *)&f);
-  uint16_t h = (x >> 16) & 0xFFFF;
+static inline uint16_t fp32_to_bf16_bits(uint32_t f) {
+  /*
+   * Extract the sign of the input number into the high bit of the 16-bit word:
+   *
+   *      +---+-----+-------------------+
+   *      | S | EEEE EEEE | MMM MMMM     |
+   *      +---+-----+-------------------+
+   * Bits  15  14-7          6-0
+   */
+  const uint32_t sign = f & UINT32_C(0x80000000);
+  /*
+   * Extract the exponent and the top 7 bits of the mantissa into the bits 0-14
+   * of the 16-bit word:
+   *
+   *      +---+-----+-------------------+
+   *      | 0 | EEEE EEEE | MMM MMMM     |
+   *      +---+-----+-------------------+
+   * Bits  14  7-0          6-0
+   */
+  const uint32_t rest = (f >> 16) & UINT32_C(0x7FFF);
 
-  return h;
+  // Combine the sign with the rest of the number
+  const uint16_t bfloat16 = (sign >> 16) | rest;
+
+  // Handle rounding by examining the bits that are being truncated
+  const uint32_t rounding_mask = UINT32_C(0x00007FFF);
+  const uint32_t rounding_bits = f & rounding_mask;
+  const uint32_t halfway = UINT32_C(0x00004000);
+  if (rounding_bits > halfway || (rounding_bits == halfway && (bfloat16 & 1))) {
+    // Round up
+    return bfloat16 + 1;
+  } else {
+    // Truncate
+    return bfloat16;
+  }
 }
+
+
+// inline uint16_t fp32_to_bf16_bits(uint32_t f) {
+//   uint32_t x = *((uint32_t *)&f);
+//   uint16_t h = (x >> 16) & 0xFFFF;
+
+//   return h;
+// }
 
 typedef union {
   float fval;
@@ -147,13 +191,35 @@ static inline uint32_t fp16_ieee_to_fp32_bits(uint16_t h) {
           ~zero_mask);
 }
 
+void check_bf16_tensor(bm_handle_t bm_handle, bm_device_mem_t mem) {
+  std::vector<uint16_t> data;
+  bm_memcpy_d2s(bm_handle, data.data(), mem);
+  std::cout << "-------------check>>------------" << std::endl;
+  for (size_t i = 0; i < data.size(); i++) {
+    if (data[i] == data[i]) {
+      ;
+    } else {
+      std::cout << "Fine NAN " << i << std::endl;
+      bits_print(data[i]);
+    }
+  }
+  std::cout << "-------------<<check------------" << std::endl;
+}
+
 void dump_bf16_tensor(bm_handle_t bm_handle, bm_device_mem_t mem, int offset,
-                      int size) {
+                      int size, int show) {
   std::vector<uint16_t> data(size);
   bm_memcpy_d2s_partial_offset(bm_handle, data.data(), mem, size * 2, offset);
   std::cout << "-------------------------------------" << std::endl;
+  // std::cout << "dump size " << data.size() << std::endl;
   fp32 t;
   for (int i = 0; i < size; i++) {
+    //   if (data[i] == data[i]) {
+    //     ;
+    //   } else {
+    //     std::cout << "Fine NAN " << i << std::endl;
+    //   }
+    // bits_print(data[i]);
     t.bits = bf16_to_fp32_bits(data[i]);
     std::cout << t.fval << std::endl;
   }
@@ -165,6 +231,7 @@ void dump_fp16_tensor(bm_handle_t bm_handle, bm_device_mem_t mem, int offset,
   std::vector<uint16_t> data(size);
   bm_memcpy_d2s_partial_offset(bm_handle, data.data(), mem, size * 2, offset);
   std::cout << "-------------------------------------" << std::endl;
+  // std::cout << "dump size " << data.size() << std::endl;
   fp32 t;
   for (int i = 0; i < size; i++) {
     t.bits = fp16_ieee_to_fp32_bits(data[i]);
@@ -176,9 +243,9 @@ void dump_fp16_tensor(bm_handle_t bm_handle, bm_device_mem_t mem, int offset,
 void dump_fp32_tensor(bm_handle_t bm_handle, bm_device_mem_t mem, int offset,
                       int size) {
   std::vector<float> data(size);
-  std::cout << "dump size " << data.size() << std::endl;
   bm_memcpy_d2s_partial_offset(bm_handle, data.data(), mem, size * 4, offset);
   std::cout << "-------------------------------------" << std::endl;
+  // std::cout << "dump size " << data.size() << std::endl;
   for (int i = 0; i < size; i++) {
     std::cout << data[i] << std::endl;
   }
@@ -192,6 +259,7 @@ void dump_int_tensor(bm_handle_t bm_handle, bm_device_mem_t mem, int offset,
   std::vector<int> data(size);
   bm_memcpy_d2s_partial_offset(bm_handle, data.data(), mem, size * 4, offset);
   std::cout << "-------------------------------------" << std::endl;
+  // std::cout << "dump size " << data.size() << std::endl;
   for (int i = 0; i < size; i++) {
     std::cout << data[i] << std::endl;
   }
