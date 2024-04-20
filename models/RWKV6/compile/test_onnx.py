@@ -68,7 +68,7 @@ def test_emb(input_dict, path="tmp/onnx/"):
     model_p = f"{path}embedding.onnx"
     session = ort.InferenceSession(model_p, providers=providers)
     ort_outs = session.run(None, input_dict)
-    print(f"emb {ort_outs}")
+    print(f"emb {ort_outs[0].tolist()[0][0:100]}\r\n")
     return ort_outs[0]
 
 
@@ -94,11 +94,11 @@ if __name__ == "__main__":
     model_path = "tmp/onnx/"
 
     # EMB
-    token = np.array([[1922]]).astype(np.int64).transpose()
+    token = np.array([[34550]]).astype(np.int64).transpose()
     t = token[0]
     emb_inputs = {"input_ids": t.reshape(1, 1)}
     emb_out = test_emb(emb_inputs)
-
+    # print(emb_out.tolist())
     state = np.zeros((1, 1584, 2048), dtype=np.float32)
 
     # Block
@@ -106,18 +106,29 @@ if __name__ == "__main__":
     for i in range(24):
         if i == 0:
             block_inputs_0 = {"b_in": emb_out, "state.1": state}
+            # print(state[:,500])
+            # print(state[:,500])
             block_out = test_block_i(block_inputs_0, i)
+            print(f"state {block_out[0]}")
             print(f"state {np.min(block_out[1])} {np.max(block_out[1])}")
+            # print(f"state {block_out[1][:,500]}")
+            # print(f"state {block_out[1]}")
         else:
             block_inputs_i = {"b_in": block_out[0], "state.1": block_out[1]}
             block_out = test_block_i(block_inputs_i, i)
             print(f"state {np.min(block_out[1])} {np.max(block_out[1])}")
+            # print(f"state {block_out[1][:,500]}")
+            print(f"state {np.min(block_out[0])} {np.max(block_out[0])}")
+            print(f"state {block_out[0]}")
+            # print(f"state {block_out[1]}")
 
     # Lm_head
     # model_print("tmp/onnx/lm_head.onnx")
     # print(f"lm_head_in {block_out[0]}")
     lm_head_inputs = {"hidden_dim": block_out[0]}
     lm_head_out = test_lm_head(lm_head_inputs)
+    print(f"logits {lm_head_out.tolist()[0][0:60]}")
+    print(f"state {np.min(lm_head_out)} {np.max(lm_head_out)}")
     
     token_id = sample_logits(lm_head_out, 1, 0)
     print(f"token_id {token_id}")
