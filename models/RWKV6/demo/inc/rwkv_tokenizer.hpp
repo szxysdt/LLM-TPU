@@ -59,6 +59,7 @@ class RWKV_Tokenizer {
   std::vector<std::vector<uint32_t>> encode(std::string &inputs);
   // 解码
   std::vector<std::string> decode(std::vector<std::vector<uint32_t>> &tokens);
+  std::string decode(uint32_t token);
 
  private:
   std::unordered_map<int, std::vector<uint8_t>> idx2token;
@@ -70,7 +71,7 @@ class RWKV_Tokenizer {
   std::vector<uint32_t> encodeBytes(std::string &inputs);
   // 单次解码: token->字符
   std::string decodeBytes(std::vector<uint32_t> &tokens);
+  std::string decodeBytes(uint32_t &token);
 };
-
 
 #endif  // _RWKV_TOKENIZER_HPP_
