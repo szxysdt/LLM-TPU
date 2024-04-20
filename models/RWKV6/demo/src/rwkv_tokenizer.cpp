@@ -1,6 +1,5 @@
 #include "rwkv_tokenizer.hpp"
 
-
 static const char *kTypeNames[] = {"Null",  "False",  "True",  "Object",
                                    "Array", "String", "Number"};
 
@@ -151,6 +150,12 @@ std::string RWKV_Tokenizer::decodeBytes(std::vector<uint32_t> &tokens) {
   return result;
 };
 
+std::string RWKV_Tokenizer::decodeBytes(uint32_t &token) {
+  std::string token_res(this->idx2token[token].begin(),
+                        this->idx2token[token].end());
+  return token_res;
+};
+
 std::vector<std::vector<uint32_t>> RWKV_Tokenizer::encode(std::string &input) {
   std::vector<std::vector<uint32_t>> result;
   result.push_back(
@@ -176,4 +181,9 @@ std::vector<std::string> RWKV_Tokenizer::decode(
         decodeBytes(batch));  // 解码每一批tokens并添加到结果向量中
   }
   return decodedStrings;
+}
+// 解码函数
+std::string RWKV_Tokenizer::decode(uint32_t token) {
+  std::string decodedString = decodeBytes(token);
+  return decodedString;
 }
