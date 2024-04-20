@@ -114,8 +114,19 @@ model_deploy.py \
     --chip bm1684x \
     $device_args \
     --model lm_head.bmodel
+
+model_transform.py \
+    --model_name greedy_head \
+    --model_def ../../onnx/greedy_head.onnx \
+    --mlir greedy_head.mlir
+
+model_deploy.py \
+    --mlir greedy_head.mlir \
+    --chip bm1684x \
+    --model greedy_head.bmodel
+
 rm *.npz
-models=${models}${outdir}'/lm_head.bmodel '
+models=${models}${outdir}'/lm_head.bmodel '$outdir'/greedy_head.bmodel '
 popd
 echo $models
 
