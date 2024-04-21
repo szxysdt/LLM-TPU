@@ -42,7 +42,8 @@ class RWKV6 {
   /**
    * RWKV forward process
    */
-  void rwkv_forward();
+  int rwkv_forward_prefill();
+  int rwkv_forward_rnn(uint32_t input_token);
   /**
    * Store the innner state of RWKV
    */
@@ -59,6 +60,7 @@ class RWKV6 {
  public:
   int NUM_LAYERS = 0;
   std::string generation_mode;
+  int max_gen_length = 100;  // for test
 
  private:
   //  模型句柄

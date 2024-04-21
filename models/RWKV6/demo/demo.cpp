@@ -74,10 +74,14 @@ void RWKV6::init(const std::vector<int> &devices, std::string model_path,
   // STATE_SIZE_2 = net_blocks[0]->stages[0].input_shapes->dims[2];
 
   // get state size
-  STATE_SIZE_1 = 1584;
-  STATE_SIZE_2 = 2048;
+  int state_byte_size_1 = net_blocks[0]->max_input_bytes[0];
+  int state_byte_size_2 = net_blocks[0]->max_input_bytes[1];
+  int first_state_size = state_byte_size_2 / state_byte_size_1;
+  int second_state_size = net_embed->stages[0].output_shapes->dims[1];
+  STATE_SIZE_1 = first_state_size;
+  STATE_SIZE_2 = second_state_size;
 
-  // TODO: state cache
+  // TODO: state cache (bm tensor)
 
   return;
 }
@@ -85,9 +89,7 @@ void RWKV6::init(const std::vector<int> &devices, std::string model_path,
 void RWKV6::deinit() {
   // TODO bm_free_device && bmrt_destroy && bm_dev_free
   // if (false == io_alone) {
-  // for (int i = 0; i < NUM_LAYERS; i++) {
-  //   bm_free_device(bm_handle, state[i]);
-  // }
+  //   bm_free_device(bm_handle, state);
   // }
   bmrt_destroy(p_bmrt);
   for (auto h : handles) {

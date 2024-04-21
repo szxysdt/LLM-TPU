@@ -67,7 +67,6 @@ static inline uint16_t fp32_to_bf16_bits(uint32_t f) {
   }
 }
 
-
 // inline uint16_t fp32_to_bf16_bits(uint32_t f) {
 //   uint32_t x = *((uint32_t *)&f);
 //   uint16_t h = (x >> 16) & 0xFFFF;
@@ -212,6 +211,7 @@ void dump_bf16_tensor(bm_handle_t bm_handle, bm_device_mem_t mem, int offset,
   bm_memcpy_d2s_partial_offset(bm_handle, data.data(), mem, size * 2, offset);
   std::cout << "-------------------------------------" << std::endl;
   // std::cout << "dump size " << data.size() << std::endl;
+  std::cout << "dump_bf16_tensor" << std::endl;
   fp32 t;
   for (int i = 0; i < size; i++) {
     //   if (data[i] == data[i]) {
@@ -246,6 +246,7 @@ void dump_fp32_tensor(bm_handle_t bm_handle, bm_device_mem_t mem, int offset,
   bm_memcpy_d2s_partial_offset(bm_handle, data.data(), mem, size * 4, offset);
   std::cout << "-------------------------------------" << std::endl;
   // std::cout << "dump size " << data.size() << std::endl;
+  std::cout << "dump_fp32_tensor" << std::endl;
   for (int i = 0; i < size; i++) {
     std::cout << data[i] << std::endl;
   }
@@ -259,7 +260,8 @@ void dump_int_tensor(bm_handle_t bm_handle, bm_device_mem_t mem, int offset,
   std::vector<int> data(size);
   bm_memcpy_d2s_partial_offset(bm_handle, data.data(), mem, size * 4, offset);
   std::cout << "-------------------------------------" << std::endl;
-  // std::cout << "dump size " << data.size() << std::endl;
+  // std::cout << "dump_int_tensor" << data.size() << std::endl;
+  std::cout << "dump_int_tensor" << std::endl;
   for (int i = 0; i < size; i++) {
     std::cout << data[i] << std::endl;
   }
