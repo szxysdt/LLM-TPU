@@ -60,7 +60,9 @@ class RWKV6 {
  public:
   int NUM_LAYERS = 0;
   std::string generation_mode;
-  int max_gen_length = 100;  // for test
+  int max_gen_length = 50;  // for test
+  bool io_alone;
+  std::vector<int> visited_tokens;
 
  private:
   //  模型句柄

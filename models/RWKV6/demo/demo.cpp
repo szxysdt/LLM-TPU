@@ -69,10 +69,6 @@ void RWKV6::init(const std::vector<int> &devices, std::string model_path,
     net_blocks.emplace_back(bmrt_get_network_info(p_bmrt, block_name.c_str()));
   }
 
-  // This API is not available, do not use it!
-  // STATE_SIZE_1 = net_blocks[0]->stages[0].input_shapes->dims[1];
-  // STATE_SIZE_2 = net_blocks[0]->stages[0].input_shapes->dims[2];
-
   // get state size
   int state_byte_size_1 = net_blocks[0]->max_input_bytes[0];
   int state_byte_size_2 = net_blocks[0]->max_input_bytes[1];
