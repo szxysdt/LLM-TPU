@@ -1,8 +1,5 @@
 #include "demo.hpp"
 
-
-
-
 void RWKV6::chat_rwkv() {
   while (true) {
     std::cout << "\nUser: ";
@@ -36,17 +33,17 @@ void RWKV6::generate(const std::string &input_str) {
   tokens_temp.clear();
   std::copy(res.begin(), res.end(), std::back_inserter(tokens_temp));
 
-  std::cout << "\r\ntokens_temp=[";
-  for (const auto &inner_vec : tokens_temp) {
-    std::cout << "[";
-    for (uint32_t val : inner_vec) {
-      std::cout << val << ", ";
-    }
-    std::cout << "]";
-  }
-  std::cout << "]\r\n" << std::endl;
 
-  rwkv_forward();
+// prefill 输出第一个token
+  uint32_t token = rwkv_forward_prefill();
+  std::string token_string = rwkv_tokenizer.decode(token);
+  std::cout << "decode token= " << token_string << std::endl;
+  
+// while (token != 0 && token_length < max_gen_length) {
+//     result_tokens.emplace_back(token);
+//     token = rwkv_forward_rnn(token);
+//   }
+
 
   std::vector<std::string> res_str;
   res_str = rwkv_tokenizer.decode(res);
