@@ -286,5 +286,6 @@ if __name__ == "__main__":
 
     print(f"Convert lm_head")
     convert_lm_head()
+    convert_greedy_head()
 
     print(f"\nDone.\nOnnx weight has saved in {folder}")
