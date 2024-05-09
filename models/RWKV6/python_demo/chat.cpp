@@ -4,9 +4,23 @@
 #include <iostream>
 #include <vector>
 #include <random>
+#include <iostream>
+#include <cstdlib>
+#include <vector>
+#include <assert.h>
+#include <chrono>
+#include <algorithm>
+#include <pybind11/pybind11.h>
+#include <pybind11/stl.h>
+#include "memory.h"
+#include "bmruntime_interface.h"
+#include <getopt.h>
+#include <stdio.h>
+#include <inttypes.h>
+#include <random>
+#include <numeric>
 
 #include "bmruntime_interface.h"
-#include "rwkv_tokenizer.hpp"
 
 class RWKV6
 {
@@ -16,14 +30,14 @@ public:
   void deinit();
 
   // forward method
-  int prefill(std::vector<uint32_t> &tokens, bool cache_state2mem = false, bool use_previous_state, bool use_cached_state = false);
+  int prefill(std::vector<uint32_t> &tokens, bool cache_state2mem = false, bool use_previous_state = false, bool use_cached_state = false);
 
   int rnn_gen(uint32_t input_token,
               //  bool use_cached_state = false,
-              bool cache_state = false);
+              bool cache_state2mem = false);
 
   // Normal chat interface
-  std::vector<int> generate(std::vector<int> &history_tokens, int EOS);
+  std::vector<int> generate(std::vector<uint32_t> &input_tokens, int EOS);
 
   std::mt19937 sgen;
   RWKV6() : sgen(std::random_device()()){};
@@ -67,17 +81,11 @@ private:
   const bm_net_info_t *net_embed;
   const bm_net_info_t *net_lm_head;
   const bm_net_info_t *net_greedy_head;
-
+  const bm_net_info_t *net_penalty_sample_head;
   // 内部变量
   const uint16_t STATE_INIT_DATA = 0x0000;
   std::vector<std::vector<uint32_t>> tokens_temp; // temp the token to be infer
   bm_device_mem_t state_cache;                    // state cache
-
-  // rwkv_tokenizer
-  RWKV_Tokenizer rwkv_tokenizer;
-
-  //
-  const bm_net_info_t *net_lm, *net_greedy_head, *net_penalty_sample_head;
 };
 /**
  * run a net
@@ -249,6 +257,7 @@ int RWKV6::greedy_search(const bm_net_info_t *net,
 }
 /**
  * penalty sample
+ * TODO: need to fix this
  */
 int RWKV6::penalty_sample(const bm_net_info_t *net, bm_device_mem_t &logits_mem)
 {
@@ -294,7 +303,7 @@ int RWKV6::penalty_sample(const bm_net_info_t *net, bm_device_mem_t &logits_mem)
  * @param tokens
  * @param cache_state2mem
  * @param use_previous_state  使用模型内存里的状态
- * @param use_cached_state    使用手动缓存的状态
+ * @param use_cached_state    使用主动缓存的状态
  * @return int
  */
 int RWKV6::prefill(std::vector<uint32_t> &tokens, bool cache_state2mem, bool use_previous_state, bool use_cached_state)
@@ -309,7 +318,7 @@ int RWKV6::prefill(std::vector<uint32_t> &tokens, bool cache_state2mem, bool use
     assert(state_mem_cached_flag ==
            true); // 缓存了才能用，禁止在没做缓存的情况下使用模型内state
   }
-  assert(use_previous_state && use_cached_state == false); // 禁止同时使用两个缓存！
+  assert((use_previous_state && use_cached_state) == 0); // 禁止同时使用两个缓存！
   std::vector<uint16_t> state_init_data(STATE_SIZE_1 * STATE_SIZE_2,
                                         STATE_INIT_DATA);
   /**
@@ -321,13 +330,13 @@ int RWKV6::prefill(std::vector<uint32_t> &tokens, bool cache_state2mem, bool use
    *
    * 不能同时使用两个状态！！
    */
-  int state_logic = 0;
-  if (!use_previous_state && !use_cached_state)
-    state_logic = 0;
-  else if (use_previous_state && !use_cached_state)
-    state_logic = 1;
-  else if (!use_previous_state && use_cached_state)
-    state_logic = 2;
+  // int state_logic = 0;
+  // if (!use_previous_state && !use_cached_state)
+  //   state_logic = 0;
+  // else if (use_previous_state && !use_cached_state)
+  //   state_logic = 1;
+  // else if (!use_previous_state && use_cached_state)
+  //   state_logic = 2;
 
   // start forward token by token
   for (size_t input_idx = 0; input_idx < tokens.size(); input_idx++)
@@ -339,7 +348,7 @@ int RWKV6::prefill(std::vector<uint32_t> &tokens, bool cache_state2mem, bool use
     bm_device_mem_t &emb_in_mem = net_embed->stages[0].input_mems[0];
     bm_device_mem_t &emb_out_mem = net_embed->stages[0].output_mems[0];
     // 输入单个token
-    bm_memcpy_s2d(bm_handle, emb_in_mem, (void *)tokens[input_idx]); // TODO: 测试这里
+    bm_memcpy_s2d(bm_handle, emb_in_mem, (void *)&tokens[input_idx]); // TODO: 测试这里
     // dump_int_tensor(bm_handle, emb_in_mem, 0, 1);
     net_launch(net_embed); // forward emb
 
@@ -433,27 +442,23 @@ int RWKV6::prefill(std::vector<uint32_t> &tokens, bool cache_state2mem, bool use
 }
 
 /**
- * RWKV forward process (RNN)
- * 执行前，需要进行prefill，生成前文的state_cache(存放最后一个block的out_mem内)
+ * @brief 循环推理：使用模型内存里已有的数据，进行单字推理
  *
- * cache_state    当前推理结束后，将此次state主动缓存到state_cache
- *
+ * @param input_token 新的输入token(一般为刚刚生成的token)
+ * @param cache_state2mem 是否进行 主动状态 缓存操作
+ * @return int
  */
-int RWKV6::rnn_gen(uint32_t input_token, bool cache_state)
+int RWKV6::rnn_gen(uint32_t input_token, bool cache_state2mem)
 {
-  std::vector<uint32_t> innner_inputdata(1, 0x00000000);
-  uint32_t output_token_temp = 0; // 复用的token缓存
-
-  innner_inputdata[0] = input_token; // 填充输入token
+  // 缓存了才能RNN，禁止在没做缓存的情况下使用模型内state
+  assert(state_calculated_flag == true);
 
   /**
    * emb forward
    */
-  // 初始化emb的输入内存
   bm_device_mem_t &emb_in_mem = net_embed->stages[0].input_mems[0];
   bm_device_mem_t &emb_out_mem = net_embed->stages[0].output_mems[0];
-  // 输入单个token
-  bm_memcpy_s2d(bm_handle, emb_in_mem, (void *)innner_inputdata.data());
+  bm_memcpy_s2d(bm_handle, emb_in_mem, (void *)&input_token);
   // dump_int_tensor(bm_handle, emb_in_mem, 0, 1);
   net_launch(net_embed); // forward emb
   /**
@@ -466,53 +471,49 @@ int RWKV6::rnn_gen(uint32_t input_token, bool cache_state)
   {
     bm_device_mem_t &in0_mem = net_blocks[idx]->stages[0].input_mems[0];
     bm_device_mem_t &in1_mem = net_blocks[idx]->stages[0].input_mems[1];
-
-    if (idx == 0)
+    if (idx == 0) // block_0，拷贝内存状态
     {
-      // 第一层forward需要传入状态
-      // TODO 根据不同的模式，初始化不同的状态
-      // 例如：没有状态/放弃前面的状态，则初始化状态
-      // if (state_init_flag)...
-
-      // RNN生成模式，初始化state为上一波跑完的state
-      assert(state_calculated_flag == true); // 之前没跑过prefill的话，禁止输出
       bm_device_mem_t &past_out1_mem =
           net_blocks[NUM_LAYERS - 1]->stages[0].output_mems[1];
-      d2d(in1_mem, past_out1_mem);
-      // 第一层，输入来自emb
-      d2d(in0_mem, emb_out_mem);
+      d2d(in1_mem, past_out1_mem); // 初始化state为上一波跑完的state
+      d2d(in0_mem, emb_out_mem);   // 第一层，输入来自emb
     }
-    else
+    else // 非第一层，复制上一层输出
     {
-      // 非第一层，复制上一层输出
       out0_mem = net_blocks[idx - 1]->stages[0].output_mems[0];
       out1_mem = net_blocks[idx - 1]->stages[0].output_mems[1];
       d2d(in0_mem, out0_mem);
       d2d(in1_mem, out1_mem);
     }
-    // start forward
-    net_launch(net_blocks[idx]);
+    net_launch(net_blocks[idx]); // start forward
   }
-  if (cache_state)
+  if (cache_state2mem)
   {
     d2d(state_cache, net_blocks[NUM_LAYERS - 1]->stages[0].output_mems[1]);
+    state_mem_cached_flag = true; // 状态已经主动缓存
   }
-
-  // 重新分配输出mem映射
+  /**
+   * head forward
+   */
+  // 分配内存映射
   bm_device_mem_t &out_mem =
       net_blocks[NUM_LAYERS - 1]->stages[0].output_mems[0];
-
   bm_device_mem_t &lm_in_mem = net_lm_head->stages[0].input_mems[0];
   bm_device_mem_t &lm_out_mem = net_lm_head->stages[0].output_mems[0];
   d2d(lm_in_mem, out_mem);
   net_launch(net_lm_head);
 
-  // sample logits
+  /**
+   * sample forward
+   */
+  uint32_t output_token_temp = 0;
   if (generation_mode == "greedy")
   {
     output_token_temp = greedy_search(net_greedy_head, lm_out_mem);
-    // } else if (generation_mode == "penalty_sample") {
-    //   token = penalty_sample(net_penalty_sample_head, lm_out_mem);
+  }
+  else if (generation_mode == "penalty_sample")
+  {
+    output_token_temp = penalty_sample(net_penalty_sample_head, lm_out_mem);
   }
   else
   {
@@ -523,13 +524,37 @@ int RWKV6::rnn_gen(uint32_t input_token, bool cache_state)
   return output_token_temp;
 }
 
+std::vector<int> RWKV6::generate(std::vector<uint32_t> &input_tokens, int EOS)
+{
+  if (input_tokens.empty())
+  {
+    printf("Sorry: your input is empty!!\n");
+    input_tokens.clear();
+    return {};
+  }
+  // 限制最大token数（虽然可能没啥用）
+  if ((int)input_tokens.size() > SEQLEN - 10)
+  {
+    input_tokens.clear();
+    printf("Error: your question is too large!\n");
+    return {};
+  }
+  std::vector<int> result_tokens;
+  int token = prefill(input_tokens);
+  while (token != EOS && token_length < SEQLEN)
+  {
+    result_tokens.emplace_back(token);
+    token = rnn_gen(token);
+  }
+  return result_tokens;
+}
+
 PYBIND11_MODULE(chat, m)
 {
   pybind11::class_<RWKV6>(m, "RWKV6")
       .def(pybind11::init<>())
       .def("init", &RWKV6::init)
       .def("prefill", &RWKV6::prefill)
-      // .def("prefill", pybind11::overload_cast<std::vector<int> &, bool>(&RWKV6::prefill))
       .def("rnn_gen", &RWKV6::rnn_gen)
       .def("generate", &RWKV6::generate)
       .def("deinit", &RWKV6::deinit)
