@@ -64,7 +64,7 @@ elif [ x$mode == x"bf16" ]; then
 elif [ x$mode == x"int4" ]; then
     quantize_args="--quantize W4BF16 --q_group_size 64"
 else
-    echo "Error, unknown quantize mode (Now only support F16/BF16/F32)"
+    echo "Error, unknown quantize mode (Now only support INT4/INT8/BF16)"
     exit 1
 fi
 
