@@ -24,9 +24,9 @@ pip install transformers_stream_generator einops tiktoken accelerate transformer
 python export_onnx.py --model_path your_torch_path --device cuda
 ```
 
-### export jacobi onnx
+### export onnx used for parallel demo
 ```shell
-python export_onnx_jacobi.py --model_path your_torch_path --guess_len 8 --generation_mode sample --device cuda
+python export_onnx.py --model_path your_torch_path --device cuda --lmhead_with_topk 1
 ```
 
 PS：
@@ -50,6 +50,11 @@ popd
 ### compile jacobi bmodel
 ```shell
 ./compile_jacobi.sh --mode int4 --name qwen-7b --addr_mode io_alone --generation_mode sample --decode_mode jacobi --seq_length 8192
+```
+
+### compile bmodel for parallel demo
+```shell
+./compile.sh --mode int4 --name qwen-7b --addr_mode io_alone --seq_length 8192 --num_device 8
 ```
 
 PS：
