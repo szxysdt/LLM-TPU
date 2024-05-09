@@ -1,13 +1,10 @@
 cmake_minimum_required(VERSION 3.10)
 project(rwkv6)
 
-set(CMAKE_EXPORT_COMPILE_COMMANDS ON CACHE INTERNAL "") 
-
 if (NOT DEFINED TARGET_ARCH)
     set(TARGET_ARCH pcie)
 endif()
 
-include_directories(${PROJECT_SOURCE_DIR}/inc)
 include_directories(${PROJECT_SOURCE_DIR}/../../../support/include)
 
 if (${CMAKE_HOST_SYSTEM_PROCESSOR} STREQUAL "aarch64")
@@ -20,13 +17,18 @@ elseif (${TARGET_ARCH} STREQUAL "pcie")
     message("PCIE mode, starting......")
 endif()
 
-# add_definitions(-DDEBUG --std=c++17 -fPIC -Wall -Werror)
-# For testing, it will be removed
-add_definitions(-DDEBUG --std=c++17 -fPIC -Wall)
+add_definitions(-DDEBUG --std=c++17 -fPIC -Wall -Werror)
 set(CMAKE_BUILD_TYPE "Debug")
-# set(CMAKE_BUILD_TYPE "Release")
 
-file(GLOB_RECURSE SRCS ${PROJECT_SOURCE_DIR}/src/*.cpp)
+find_package(pybind11 REQUIRED CONFIG)
 
-add_executable(rwkv6 demo.cpp ${SRCS})
-target_link_libraries(rwkv6 bmlib bmrt)
+file(GLOB CPP_FILES ${PROJECT_SOURCE_DIR}/*.cpp)
+
+foreach(CPP_FILE ${CPP_FILES})
+    get_filename_component(MODULE_NAME ${CPP_FILE} NAME_WE)
+    pybind11_add_module(${MODULE_NAME} ${CPP_FILE})
+    target_link_libraries(${MODULE_NAME} PUBLIC bmrt bmlib)
+    install(TARGETS ${MODULE_NAME} DESTINATION python)
+endforeach()
+
+
