@@ -64,7 +64,7 @@ elif [ x$mode == x"bf16" ]; then
 elif [ x$mode == x"int4" ]; then
     quantize_args="--quantize W4BF16 --q_group_size 64"
 else
-    echo "Error, unknown quantize mode (Now only support F16/BF16/F32)"
+    echo "Error, unknown quantize mode (Now only support INT4/INT8/BF16)"
     exit 1
 fi
 
@@ -125,8 +125,18 @@ model_deploy.py \
     --chip bm1684x \
     --model greedy_head.bmodel
 
+model_transform.py \
+    --model_name penalty_sample_head \
+    --model_def ../../onnx/penalty_sample_head.onnx \
+    --mlir penalty_sample_head.mlir
+
+model_deploy.py \
+    --mlir penalty_sample_head.mlir \
+    --chip bm1684x \
+    --model penalty_sample_head.bmodel
+
 rm *.npz
-models=${models}${outdir}'/lm_head.bmodel '${outdir}'/greedy_head.bmodel '
+models=${models}${outdir}'/lm_head.bmodel '$outdir'/greedy_head.bmodel '$outdir'/penalty_sample_head.bmodel '
 popd
 echo $models
 

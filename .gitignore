@@ -5,6 +5,8 @@ deploy/
 .vscode
 *.npz
 __pycache__
+core
+*.so
 
 # For testing purposes, it will be removed
 **/rapidjson/**
