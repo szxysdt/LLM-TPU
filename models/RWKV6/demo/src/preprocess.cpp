@@ -33,17 +33,20 @@ void RWKV6::generate(const std::string &input_str) {
   tokens_temp.clear();
   std::copy(res.begin(), res.end(), std::back_inserter(tokens_temp));
 
-
-// prefill 输出第一个token
+  // prefill 输出第一个token
   uint32_t token = rwkv_forward_prefill();
   std::string token_string = rwkv_tokenizer.decode(token);
   std::cout << "decode token= " << token_string << std::endl;
-  
-// while (token != 0 && token_length < max_gen_length) {
-//     result_tokens.emplace_back(token);
-//     token = rwkv_forward_rnn(token);
-//   }
 
+  int gen_num = 0;
+  while (token != 0 && gen_num < max_gen_length) {
+    // result_tokens.emplace_back(token);
+    token = rwkv_forward_rnn(token);
+    std::string token_string = rwkv_tokenizer.decode(token);
+    std::cout << token_string << std::flush;
+    gen_num++;
+  }
+  std::cout << std::endl;
 
   std::vector<std::string> res_str;
   res_str = rwkv_tokenizer.decode(res);

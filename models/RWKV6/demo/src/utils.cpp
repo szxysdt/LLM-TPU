@@ -9,7 +9,7 @@ void RWKV6::load_rwkv_tokenizer(std::string tokenizer_path) {
               << std::endl;
     exit(-1);
   }
-  // TODO rwkv eos??
+  // default rwkv eos is "\0"
   std::cout << "Done!\n" << std::endl;
 }
 
