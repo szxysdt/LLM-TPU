@@ -193,6 +193,57 @@ def convert_greedy_head():
     )
 
 
+# refs:https://github.com/huggingface/transformers/blob/main/src/transformers/generation/logits_process.py
+class PenaltySampleHead(torch.nn.Module):
+
+    def __init__(self, top_k=50, min_tokens_to_keep=5):
+        super().__init__()
+        self.top_k = top_k
+        self.min_tokens_to_keep = min_tokens_to_keep
+        self.keep_matrix = torch.zeros((1, self.top_k), dtype=torch.bool)
+        self.keep_matrix[0, : self.min_tokens_to_keep] = True
+
+    def forward(self, m_logits, input_ids, top_p, temperature, penalty):
+        # repeat penalty
+        logits = torch.gather(m_logits, 1, input_ids)
+        logits = torch.where(logits < 0, logits * penalty, logits / penalty)
+        m_logits.scatter_(1, input_ids, logits)
+
+        # top_k
+        logits, token = torch.topk(m_logits.float(), self.top_k)
+
+        # temperature
+        logits = logits / temperature
+
+        # top_p
+        cumulative_probs = logits.softmax(dim=1).cumsum(dim=1)
+        mask = cumulative_probs < top_p
+        mask = mask + self.keep_matrix
+        filtered_logits = torch.where(mask, logits, torch.FloatTensor([-1000.0]))
+        probs = filtered_logits.softmax(dim=1)
+        return probs, token
+
+
+def convert_penalty_sample_head():
+    model = PenaltySampleHead()
+    m_logits = torch.randn(1, VOCAB_SIZE)
+    input_ids = torch.tensor([range(SEQ_LENGTH)])
+    top_p = torch.tensor([0.8])
+    temperature = torch.tensor([0.98])
+    penalty = torch.tensor([0.98])
+
+    torch.onnx.export(
+        model,
+        (m_logits, input_ids, top_p, temperature, penalty),
+        f"{folder}/penalty_sample_head.onnx",
+        verbose=False,
+        input_names=["m_logits", "input_ids", "top_p", "temperature", "penalty"],
+        output_names=["probs", "token"],
+        do_constant_folding=True,
+        opset_version=15,
+    )
+
+
 def test_all(token_id, state):
     embedding = Embedding()
     x = embedding(token_id)
@@ -220,7 +271,7 @@ if __name__ == "__main__":
     parser.add_argument("--model_path", "-m", type=str, help="path to the torch model.")
     parser.add_argument("--test", "-t", action="store_true", help="enable some tests.")
     # parser.add_argument('--model_path', type=str, help='path to the torch model.')
-    # parser.add_argument('--seq_length', type=int, default=512, help="sequence length")
+    parser.add_argument("--seq_length", type=int, default=4096, help="sequence length")
 
     args = parser.parse_args()
 
@@ -241,6 +292,7 @@ if __name__ == "__main__":
     VOCAB_SIZE = origin_model.args["vocab_size"]
     NUM_LAYERS = origin_model.num_layer
     EMB_DIM = origin_model.n_embd
+    SEQ_LENGTH = args.seq_length
     print("EMB_DIM")
     print(EMB_DIM)
     STATE_SIZE = origin_model.state_size
@@ -286,5 +338,7 @@ if __name__ == "__main__":
 
     print(f"Convert lm_head")
     convert_lm_head()
+    convert_greedy_head()
+    convert_penalty_sample_head()
 
     print(f"\nDone.\nOnnx weight has saved in {folder}")
