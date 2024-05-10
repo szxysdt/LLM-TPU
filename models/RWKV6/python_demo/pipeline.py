@@ -61,7 +61,7 @@ class RWKV6:
         while token != 0 and len(output_token) < test_num + input_len:
             output_token.append(token)
             print(self.tokenizer.decode([[token]])[0], end="", flush=True)
-            token = self.model.rnn_gen(token, False)
+            token = self.model.rnn_gen(False,False)
         if token != 0:
             print(self.tokenizer.decode([[token]])[0], end="\n\n", flush=True)
 
@@ -75,20 +75,10 @@ class RWKV6:
 
 def main(args):
     model = RWKV6(args)
-    input_str = """你是一个物联网助手，你管理的设备如下：
-**空调**
-**咖啡机**
-**客厅电灯**
-你可以通过文字的方式开启你管理的设备：
-例如:
-开启某个设备需要发送指令:{"指令":"开启/关闭","设备":"空调"}
-
-你的主人对你说:"早安，帮我弄杯咖啡。"
-当前各个设备的状态:
-空调=关闭,
-咖啡机=关闭,
-客厅电灯=关闭, 
-你应该发送指令:{"""
+    input_str = """User: 
+基于cpp编写一个冒泡排序算法
+Assistant:
+"""
     model.test(input_str)
     print()
     while True:

@@ -32,8 +32,7 @@ public:
   // forward method
   int prefill(std::vector<uint32_t> &tokens, bool cache_state2mem = false, bool use_previous_state = false, bool use_cached_state = false);
 
-  int rnn_gen(uint32_t input_token,
-              //  bool use_cached_state = false,
+  int rnn_gen(bool use_cached_state = false,
               bool cache_state2mem = false);
 
   // Normal chat interface
@@ -163,10 +162,12 @@ void RWKV6::init(const std::vector<int> &devices, std::string model_path)
   net_lm_head = bmrt_get_network_info(p_bmrt, "lm_head");
   net_greedy_head = bmrt_get_network_info(p_bmrt, "greedy_head");
   net_penalty_sample_head = bmrt_get_network_info(p_bmrt, "penalty_sample_head");
+  SEQLEN = net_penalty_sample_head->stages[0].input_shapes[1].dims[1]; // TODO: 序列长度，后续改成无限长，但是限制惩罚采样的复读长度
   int num_nets = bmrt_get_network_number(p_bmrt);
   NUM_LAYERS = num_nets - 4;
 
-  // TODO: visited_tokens ?
+  // resize
+  visited_tokens.resize(SEQLEN);
 
   // net blocks
   for (int i = 0; i < NUM_LAYERS; i++)
@@ -268,8 +269,8 @@ int RWKV6::penalty_sample(const bm_net_info_t *net, bm_device_mem_t &logits_mem)
   auto &out0_mem = net->stages[0].output_mems[0];
   auto &out1_mem = net->stages[0].output_mems[1];
 
-  std::vector<int> generated_tokens(SEQLEN, visited_tokens[token_length - 1]);
-  repeat_last_n = std::min(repeat_last_n, token_length); // 总生成token长度 或 重复判定范围
+  std::vector<int> generated_tokens(SEQLEN, visited_tokens[token_length - 1]); // SEQLEN为采样器限制长度，后面改成无限长
+  repeat_last_n = std::min(repeat_last_n, token_length);                       // 总生成token长度 或 重复判定范围
   std::copy(visited_tokens.begin() + token_length - repeat_last_n,
             visited_tokens.begin() + token_length,
             generated_tokens.begin());
@@ -308,16 +309,14 @@ int RWKV6::penalty_sample(const bm_net_info_t *net, bm_device_mem_t &logits_mem)
  */
 int RWKV6::prefill(std::vector<uint32_t> &tokens, bool cache_state2mem, bool use_previous_state, bool use_cached_state)
 {
+  token_length = tokens.size();
+  std::copy(tokens.begin(), tokens.end(), visited_tokens.data());
+
   if (use_previous_state)
-  {
-    assert(state_calculated_flag ==
-           true); // 缓存了才能用，禁止在没做缓存的情况下使用模型内state
-  }
+    assert(state_calculated_flag == true); // 禁止在没做缓存的情况下使用模型内state
   if (use_cached_state)
-  {
-    assert(state_mem_cached_flag ==
-           true); // 缓存了才能用，禁止在没做缓存的情况下使用模型内state
-  }
+    assert(state_mem_cached_flag == true); // 禁止在没做缓存的情况下使用模型内state
+
   assert((use_previous_state && use_cached_state) == 0); // 禁止同时使用两个缓存！
   std::vector<uint16_t> state_init_data(STATE_SIZE_1 * STATE_SIZE_2,
                                         STATE_INIT_DATA);
@@ -339,7 +338,7 @@ int RWKV6::prefill(std::vector<uint32_t> &tokens, bool cache_state2mem, bool use
   //   state_logic = 2;
 
   // start forward token by token
-  for (size_t input_idx = 0; input_idx < tokens.size(); input_idx++)
+  for (int input_idx = 0; input_idx < token_length; input_idx++)
   {
     /**
      * emb forward
@@ -348,8 +347,7 @@ int RWKV6::prefill(std::vector<uint32_t> &tokens, bool cache_state2mem, bool use
     bm_device_mem_t &emb_in_mem = net_embed->stages[0].input_mems[0];
     bm_device_mem_t &emb_out_mem = net_embed->stages[0].output_mems[0];
     // 输入单个token
-    bm_memcpy_s2d(bm_handle, emb_in_mem, (void *)&tokens[input_idx]); // TODO: 测试这里
-    // dump_int_tensor(bm_handle, emb_in_mem, 0, 1);
+    bm_memcpy_s2d(bm_handle, emb_in_mem, (void *)&visited_tokens[input_idx]);
     net_launch(net_embed); // forward emb
 
     /**
@@ -438,6 +436,8 @@ int RWKV6::prefill(std::vector<uint32_t> &tokens, bool cache_state2mem, bool use
     std::cerr << "Supported modes are 'greedy' or 'penalty_sample'.\n";
     throw std::runtime_error("Invalid generation mode");
   }
+  visited_tokens[token_length] = output_token_temp;
+  token_length += 1;
   return output_token_temp;
 }
 
@@ -445,11 +445,14 @@ int RWKV6::prefill(std::vector<uint32_t> &tokens, bool cache_state2mem, bool use
  * @brief 循环推理：使用模型内存里已有的数据，进行单字推理
  *
  * @param input_token 新的输入token(一般为刚刚生成的token)
- * @param cache_state2mem 是否进行 主动状态 缓存操作
+ * @param use_cached_state  是否使用 主动状态
+ * @param cache_state2mem   是否进行 主动状态 缓存操作
  * @return int
  */
-int RWKV6::rnn_gen(uint32_t input_token, bool cache_state2mem)
+int RWKV6::rnn_gen(bool use_cached_state, bool cache_state2mem)
 {
+  int cur_token = visited_tokens[token_length - 1];
+
   // 缓存了才能RNN，禁止在没做缓存的情况下使用模型内state
   assert(state_calculated_flag == true);
 
@@ -458,8 +461,7 @@ int RWKV6::rnn_gen(uint32_t input_token, bool cache_state2mem)
    */
   bm_device_mem_t &emb_in_mem = net_embed->stages[0].input_mems[0];
   bm_device_mem_t &emb_out_mem = net_embed->stages[0].output_mems[0];
-  bm_memcpy_s2d(bm_handle, emb_in_mem, (void *)&input_token);
-  // dump_int_tensor(bm_handle, emb_in_mem, 0, 1);
+  bm_memcpy_s2d(bm_handle, emb_in_mem, (void *)&cur_token);
   net_launch(net_embed); // forward emb
   /**
    * blocks forward
@@ -471,12 +473,19 @@ int RWKV6::rnn_gen(uint32_t input_token, bool cache_state2mem)
   {
     bm_device_mem_t &in0_mem = net_blocks[idx]->stages[0].input_mems[0];
     bm_device_mem_t &in1_mem = net_blocks[idx]->stages[0].input_mems[1];
-    if (idx == 0) // block_0，拷贝内存状态
+    if (idx == 0) // block_0，拷贝状态，开始生成
     {
-      bm_device_mem_t &past_out1_mem =
-          net_blocks[NUM_LAYERS - 1]->stages[0].output_mems[1];
-      d2d(in1_mem, past_out1_mem); // 初始化state为上一波跑完的state
-      d2d(in0_mem, emb_out_mem);   // 第一层，输入来自emb
+      if (use_cached_state) // 使用主动状态
+      {
+        d2d(in1_mem, state_cache);
+      }
+      else // 使用内存状态
+      {
+        bm_device_mem_t &past_out1_mem =
+            net_blocks[NUM_LAYERS - 1]->stages[0].output_mems[1];
+        d2d(in1_mem, past_out1_mem); // 初始化state为上一波跑完的state
+        d2d(in0_mem, emb_out_mem);
+      } // 第一层，输入来自emb
     }
     else // 非第一层，复制上一层输出
     {
@@ -521,6 +530,8 @@ int RWKV6::rnn_gen(uint32_t input_token, bool cache_state2mem)
     std::cerr << "Supported modes are 'greedy' or 'penalty_sample'.\n";
     throw std::runtime_error("Invalid generation mode");
   }
+  visited_tokens[token_length] = output_token_temp;
+  token_length += 1;
   return output_token_temp;
 }
 
